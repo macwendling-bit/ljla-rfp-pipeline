@@ -1,172 +1,291 @@
 import { useState, useEffect, useCallback } from "react";
 import './index.css';
 
-// ── Config ────────────────────────────────────────────────────────
 const BLUE = "#3c75bf", CHAR = "#575759", MUTED = "rgba(87,87,89,0.61)", RULE = "#e8e8e8";
 
-const DESIGN_KEYWORDS = [
-  "landscape architecture","placemaking","urban design","public realm","streetscape",
-  "waterfront","park design","plaza","promenade","green infrastructure","open space",
-  "campus","cultural","civic","community park","trail","greenway","riverwalk",
-  "town center","master plan","design services"
+// ── Scoring ────────────────────────────────────────────────────────
+const DESIGN_KW = [
+  "landscape architecture","landscape architect","placemaking","urban design",
+  "public realm","streetscape","waterfront","park design","plaza design",
+  "promenade","green infrastructure","open space design","campus grounds",
+  "cultural landscape","civic landscape","community park","trail design",
+  "greenway","riverwalk","town center design","master plan landscape",
+  "outdoor recreation design","shoreline restoration","ecological design",
+  "botanical garden","arboretum","rooftop garden","courtyard design",
+  "memorial garden","playground design","dog park","spray park",
+  "hardscape","softscape","site design","site furnishings","site amenities"
 ];
-const ENGINEERING_KEYWORDS = [
-  "civil engineering","stormwater","utilities","pavement","road construction",
-  "maintenance","mowing","snow removal","janitorial","inspection only"
+const EXCLUDE_KW = [
+  "military","armament","aircraft","ammunition","heavy vehicle","pharmacy",
+  "medical supply","drone","cybersecurity","software license","it services",
+  "staffing","janitorial","snow removal","pest control","food service",
+  "uniforms","furniture only","office supplies"
 ];
-const MA_CITIES = [
+const MA_GEO = [
   "boston","cambridge","somerville","brookline","newton","quincy","worcester",
-  "springfield","lowell","lynn","fall river","new bedford","brockton","lawrence",
-  "medford","malden","waltham","haverhill","gloucester","northampton","amherst",
-  "pittsfield","chicopee","holyoke","fitchburg","leominster","revere","taunton",
-  "barnstable","falmouth","plymouth","sandwich","yarmouth","dennis","brewster",
-  "chatham","eastham","wellfleet","truro","provincetown","cape cod","martha's vineyard",
-  "nantucket","lexington","concord","lincoln","sudbury","acton","arlington",
-  "belmont","watertown","needham","wellesley","dedham","milton","canton"
+  "springfield","lowell","lynn","fall river","new bedford","brockton","medford",
+  "malden","waltham","haverhill","gloucester","northampton","amherst","pittsfield",
+  "chicopee","holyoke","fitchburg","leominster","revere","taunton","barnstable",
+  "falmouth","plymouth","sandwich","yarmouth","dennis","brewster","chatham",
+  "eastham","wellfleet","truro","provincetown","cape cod","nantucket",
+  "lexington","concord","lincoln","sudbury","acton","arlington","belmont",
+  "watertown","needham","wellesley","dedham","milton","canton","massachusetts",
+  " ma ","boston area","greater boston"
 ];
-const NE_STATES = ["massachusetts","ma","connecticut","ct","rhode island","ri",
-  "new hampshire","nh","vermont","vt","maine","me"];
-const NY_STATES = ["new york","ny","new jersey","nj","pennsylvania","pa"];
+const NE_GEO = ["connecticut","rhode island","new hampshire","vermont","maine",
+  " ct "," ri "," nh "," vt "," me ","new england"];
+const NY_GEO = ["new york","new jersey","pennsylvania"," ny "," nj "," pa "];
 
 function scoreOpportunity(opp) {
   const text = `${opp.title} ${opp.description} ${opp.agency} ${opp.location}`.toLowerCase();
+
+  // Hard exclude — non-LA work
+  const excl = EXCLUDE_KW.filter(k => text.includes(k)).length;
+  if (excl >= 2) return { score: 5, tier: "Poor Match", recommendation: "Pass" };
+
   let score = 0;
 
-  // Design sophistication (35%)
-  const designHits = DESIGN_KEYWORDS.filter(k => text.includes(k)).length;
-  const engHits = ENGINEERING_KEYWORDS.filter(k => text.includes(k)).length;
-  const designScore = Math.min(35, designHits * 8 - engHits * 10);
-  score += Math.max(0, designScore);
+  // Design sophistication (35pts)
+  const hits = DESIGN_KW.filter(k => text.includes(k)).length;
+  score += Math.min(35, hits * 9);
 
-  // Geography (25%)
-  const isMa = MA_CITIES.some(c => text.includes(c)) || text.includes(" ma ") || text.includes("massachusetts");
-  const isNE = NE_STATES.some(s => text.includes(s));
-  const isNY = NY_STATES.some(s => text.includes(s));
+  // Geography (25pts)
+  const isMa = MA_GEO.some(c => text.includes(c));
+  const isNE = NE_GEO.some(s => text.includes(s));
+  const isNY = NY_GEO.some(s => text.includes(s));
   if (isMa) score += 25;
-  else if (isNE) score += 20;
-  else if (isNY) score += 15;
-  else score += 5;
+  else if (isNE) score += 18;
+  else if (isNY) score += 12;
+  else score += 3;
 
-  // Budget (20%) — look for dollar amounts
-  const budgetMatch = text.match(/\$[\d,]+[km]?/g);
-  if (budgetMatch) {
-    const amounts = budgetMatch.map(b => {
-      const n = parseFloat(b.replace(/[$,]/g, ""));
-      if (b.toLowerCase().includes("m")) return n * 1000000;
-      if (b.toLowerCase().includes("k")) return n * 1000;
-      return n;
-    });
-    const max = Math.max(...amounts);
-    if (max >= 1000000) score += 20;
-    else if (max >= 500000) score += 16;
-    else if (max >= 200000) score += 10;
-    else if (max >= 50000) score += 5;
-  } else {
-    score += 10; // unknown budget — give partial credit
-  }
+  // Budget (20pts)
+  const $m = text.match(/\$[\d,.]+\s*m(illion)?/gi);
+  const $k = text.match(/\$[\d,.]+\s*k/gi);
+  const $raw = text.match(/\$[\d,]{4,}/g);
+  if ($m?.length) score += 20;
+  else if ($raw?.length) {
+    const max = Math.max(...$raw.map(b => parseFloat(b.replace(/[$,]/g,""))));
+    if (max >= 500000) score += 20;
+    else if (max >= 200000) score += 14;
+    else if (max >= 50000) score += 7;
+  } else if ($k?.length) score += 5;
+  else score += 8; // unknown budget
 
-  // Project type (20%)
-  if (text.includes("rfp") || text.includes("request for proposal")) score += 20;
-  else if (text.includes("rfq") || text.includes("request for qualifications")) score += 15;
-  else if (text.includes("rfi")) score += 8;
+  // Type (20pts)
+  if (/rfp|request for proposal/i.test(text)) score += 20;
+  else if (/rfq|request for qualif/i.test(text)) score += 16;
+  else if (/rfi|request for info/i.test(text)) score += 8;
+  else score += 10;
 
   score = Math.min(100, Math.max(0, score));
-
   let tier, recommendation;
   if (score >= 75) { tier = "Strong Match"; recommendation = "Pursue"; }
   else if (score >= 55) { tier = "Good Match"; recommendation = "Pursue"; }
   else if (score >= 35) { tier = "Possible Match"; recommendation = "Monitor"; }
   else { tier = "Poor Match"; recommendation = "Pass"; }
-
   return { score, tier, recommendation };
 }
 
-// ── SAM.gov API ────────────────────────────────────────────────────
+// ── SAM.gov (LA-specific keywords only) ───────────────────────────
+const SAM_KEYWORDS = [
+  "landscape architecture",
+  "landscape architect services",
+  "park design landscape",
+  "streetscape design",
+  "urban park design",
+  "waterfront park design",
+  "placemaking design",
+  "open space master plan",
+  "public plaza design",
+  "greenway trail design"
+];
+
 async function fetchSAMgov(apiKey) {
   const today = new Date();
-  const past60 = new Date(today - 60 * 86400000);
+  const past90 = new Date(today - 90 * 86400000);
   const fmt = d => `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`;
-
-  const keywords = [
-    "landscape architecture",
-    "park design",
-    "streetscape",
-    "public realm design",
-    "urban design",
-    "waterfront design"
-  ];
-
   const results = [];
   const seen = new Set();
 
-  for (const kw of keywords) {
-    const url = `https://api.sam.gov/opportunities/v2/search?limit=10&keywords=${encodeURIComponent(kw)}&postedFrom=${fmt(past60)}&postedTo=${fmt(today)}&ptype=o&api_key=${apiKey}`;
+  for (const kw of SAM_KEYWORDS) {
+    const url = `https://api.sam.gov/opportunities/v2/search?limit=10&keywords=${encodeURIComponent(kw)}&postedFrom=${fmt(past90)}&postedTo=${fmt(today)}&api_key=${apiKey}`;
     try {
       const res = await fetch(url);
-      if (!res.ok) continue;
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`SAM.gov error: ${res.status} — ${err.slice(0,200)}`);
+      }
       const data = await res.json();
       for (const item of (data.opportunitiesData || [])) {
         if (seen.has(item.noticeId)) continue;
         seen.add(item.noticeId);
-        results.push({
+        const opp = {
           id: `sam_${item.noticeId}`,
           title: item.title || "Untitled",
-          agency: item.organizationName || item.fullParentPathName || "Federal Agency",
-          type: (item.type || "RFP").toUpperCase(),
-          location: `${item.placeOfPerformance?.city?.name || ""}, ${item.placeOfPerformance?.state?.code || ""}`.replace(/^, |, $/g, "") || "See solicitation",
+          agency: item.organizationName || item.fullParentPathName?.split(".").pop() || "Federal Agency",
+          type: (item.type || "RFP").toUpperCase().replace("PRESOL","RFI").replace("COMBINE","RFP").replace("SOLICIT","RFP"),
+          location: [item.placeOfPerformance?.city?.name, item.placeOfPerformance?.state?.code].filter(Boolean).join(", ") || "See solicitation",
           state: item.placeOfPerformance?.state?.code || "",
-          deadline: item.responseDeadLine ? item.responseDeadLine.split("T")[0] : "TBD",
+          deadline: item.responseDeadLine?.split("T")[0] || "TBD",
           budget: "",
           description: item.description || item.title || "",
           sourceUrl: `https://sam.gov/opp/${item.noticeId}/view`,
-          postedDate: item.postedDate ? item.postedDate.split("T")[0] : "",
-          status: "New",
-          notes: [],
-          scoring: null,
+          postedDate: item.postedDate?.split("T")[0] || "",
+          source: "SAM.gov",
+          status: "New", notes: [], scoring: null,
           addedDate: new Date().toISOString().split("T")[0],
-        });
+        };
+        opp.scoring = scoreOpportunity(opp);
+        // Only keep LA-relevant results (score > 15)
+        if (opp.scoring.score > 15) results.push(opp);
       }
-    } catch (e) { console.warn("SAM fetch error:", e); }
+    } catch (e) { console.warn("SAM fetch error for", kw, e); throw e; }
   }
   return results;
 }
 
+// ── COMMBUYS scraper via allorigins proxy ─────────────────────────
+async function fetchCOMMBUYS() {
+  // COMMBUYS public bid search for design/architecture/landscape keywords
+  const keywords = ["landscape","park design","streetscape","urban design","open space"];
+  const results = [];
+  const seen = new Set();
+
+  for (const kw of keywords) {
+    const commbuysUrl = `https://www.commbuys.com/bso/external/publicBids.sdo?docType=BD&keyword=${encodeURIComponent(kw)}&statusCode=A`;
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(commbuysUrl)}`;
+    try {
+      const res = await fetch(proxyUrl);
+      const data = await res.json();
+      const html = data.contents || "";
+      // Parse bid rows from COMMBUYS HTML table
+      const rowRe = /<tr[^>]*class="[^"]*row[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
+      let match;
+      while ((match = rowRe.exec(html)) !== null) {
+        const cells = [...match[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(c =>
+          c[1].replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&nbsp;/g," ").trim()
+        );
+        if (cells.length < 4) continue;
+        const bidNum = cells[0]?.trim();
+        if (!bidNum || seen.has(bidNum)) continue;
+        seen.add(bidNum);
+
+        // Extract link
+        const linkMatch = match[1].match(/href="([^"]*bidId=([^"&]+)[^"]*)"/i);
+        const sourceUrl = linkMatch ? `https://www.commbuys.com${linkMatch[1]}` : "https://www.commbuys.com/bso/external/publicBids.sdo";
+
+        const opp = {
+          id: `cb_${bidNum}`,
+          title: cells[1] || `COMMBUYS Bid ${bidNum}`,
+          agency: cells[2] || "MA State Agency",
+          type: "RFP",
+          location: "Massachusetts",
+          state: "MA",
+          deadline: cells[4] || "TBD",
+          budget: "",
+          description: cells[1] || "",
+          sourceUrl,
+          postedDate: cells[3] || "",
+          source: "COMMBUYS",
+          status: "New", notes: [], scoring: null,
+          addedDate: new Date().toISOString().split("T")[0],
+        };
+        opp.scoring = scoreOpportunity(opp);
+        if (opp.scoring.score > 10) results.push(opp);
+      }
+    } catch(e) { console.warn("COMMBUYS fetch error:", e); }
+  }
+  return results;
+}
+
+// ── Boston.gov bids scraper ────────────────────────────────────────
+async function fetchBoston() {
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent("https://www.boston.gov/bid-listings")}`;
+  const results = [];
+  try {
+    const res = await fetch(proxyUrl);
+    const data = await res.json();
+    const html = data.contents || "";
+
+    // Extract bid listing items from Boston.gov HTML
+    const itemRe = /<article[^>]*>([\s\S]*?)<\/article>/gi;
+    let match;
+    const seen = new Set();
+    while ((match = itemRe.exec(html)) !== null) {
+      const inner = match[1];
+      const titleMatch = inner.match(/<h\d[^>]*>([\s\S]*?)<\/h\d>/i);
+      const linkMatch = inner.match(/href="(\/bid-listings\/[^"]+)"/i);
+      const dateMatch = inner.match(/(\d{1,2}\/\d{1,2}\/\d{4}|\w+ \d{1,2},? \d{4})/);
+      const numMatch = inner.match(/(?:Project|Bid|No\.?|#)\s*([\w-]+)/i);
+
+      const title = titleMatch?.[1].replace(/<[^>]+>/g,"").trim();
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+
+      const opp = {
+        id: `bos_${Date.now()}_${seen.size}`,
+        title,
+        agency: "City of Boston",
+        type: "RFP",
+        location: "Boston, MA",
+        state: "MA",
+        deadline: dateMatch?.[0] || "TBD",
+        budget: "",
+        description: title,
+        sourceUrl: linkMatch ? `https://www.boston.gov${linkMatch[1]}` : "https://www.boston.gov/bid-listings",
+        postedDate: "",
+        source: "City of Boston",
+        status: "New", notes: [], scoring: null,
+        addedDate: new Date().toISOString().split("T")[0],
+      };
+      opp.scoring = scoreOpportunity(opp);
+      if (opp.scoring.score > 10) results.push(opp);
+    }
+  } catch(e) { console.warn("Boston fetch error:", e); }
+  return results;
+}
+
 // ── Storage ────────────────────────────────────────────────────────
-const SK = "ljla_v5";
-const load = () => { try { return JSON.parse(localStorage.getItem(SK) || "[]"); } catch { return []; } };
-const save = (d) => { try { localStorage.setItem(SK, JSON.stringify(d)); } catch {} };
-const loadKey = () => localStorage.getItem("ljla_sam_key") || "";
-const saveKey = (k) => localStorage.setItem("ljla_sam_key", k);
+const SK = "ljla_v6";
+const load = () => { try { return JSON.parse(localStorage.getItem(SK)||"[]"); } catch { return []; }};
+const save = d => { try { localStorage.setItem(SK, JSON.stringify(d)); } catch {} };
+const loadKey = () => localStorage.getItem("ljla_sam_key")||"";
+const saveKey = k => localStorage.setItem("ljla_sam_key", k);
 
 const TIERS = ["Strong Match","Good Match","Possible Match","Poor Match"];
 const STATUSES = ["New","Reviewing","Pursuing","Submitted","Won","Passed"];
-const STATES = ["MA","NH","VT","ME","RI","CT","NY","NJ","PA"];
+const SOURCES = ["SAM.gov","COMMBUYS","City of Boston","Manual"];
 
-// ── Mini components ────────────────────────────────────────────────
 function Ring({ score, size=42 }) {
-  const r = size/2-4, c = 2*Math.PI*r, f = (score/100)*c;
+  const r=size/2-4, c=2*Math.PI*r, f=(score/100)*c;
+  const clr = score>=75?BLUE:score>=55?"#5a8f3c":score>=35?"#8a7f3c":"#bbb";
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{flexShrink:0}}>
       <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={RULE} strokeWidth={3}/>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={BLUE} strokeWidth={3}
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={clr} strokeWidth={3}
         strokeDasharray={`${f} ${c}`} transform={`rotate(-90 ${size/2} ${size/2})`}/>
-      <text x={size/2} y={size/2+4} textAnchor="middle" fontSize={size>50?13:10} fontWeight="400"
-        fill={BLUE} fontFamily="'Nunito Sans',sans-serif">{score}</text>
+      <text x={size/2} y={size/2+4} textAnchor="middle" fontSize={size>50?13:10}
+        fill={clr} fontFamily="'Nunito Sans',sans-serif">{score}</text>
     </svg>
   );
 }
 function Dots({ tier }) {
-  const n = {"Strong Match":4,"Good Match":3,"Possible Match":2,"Poor Match":1}[tier]||0;
+  const n={"Strong Match":4,"Good Match":3,"Possible Match":2,"Poor Match":1}[tier]||0;
+  const clr={"Strong Match":BLUE,"Good Match":"#5a8f3c","Possible Match":"#8a7f3c","Poor Match":"#bbb"}[tier]||"#bbb";
   return (
     <span style={{display:"inline-flex",alignItems:"center",gap:3}}>
-      {[1,2,3,4].map(i=><span key={i} style={{width:5,height:5,borderRadius:"50%",background:i<=n?BLUE:"#e0e0e0",display:"inline-block"}}/>)}
-      <span style={{marginLeft:6,fontSize:11,color:CHAR,fontWeight:400}}>{tier}</span>
+      {[1,2,3,4].map(i=><span key={i} style={{width:5,height:5,borderRadius:"50%",background:i<=n?clr:"#e0e0e0",display:"inline-block"}}/>)}
+      <span style={{marginLeft:6,fontSize:11,color:CHAR}}>{tier}</span>
     </span>
   );
 }
 function Pill({ rec }) {
-  const clr = {Pursue:BLUE,Monitor:"#8a7f3c",Pass:"#aaa"}[rec]||"#aaa";
+  const clr={Pursue:BLUE,Monitor:"#8a7f3c",Pass:"#bbb"}[rec]||"#bbb";
   return <span style={{fontSize:10,fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",color:clr,border:`1px solid ${clr}`,padding:"2px 10px"}}>{rec}</span>;
+}
+function SourceBadge({ source }) {
+  const clr={"SAM.gov":"#6b7280","COMMBUYS":"#7c5c9b","City of Boston":"#2d6a4f","Manual":MUTED}[source]||MUTED;
+  return <span style={{fontSize:9,fontWeight:600,letterSpacing:"0.12em",textTransform:"uppercase",color:clr,border:`1px solid ${clr}`,padding:"1px 7px",borderRadius:2}}>{source||"Manual"}</span>;
 }
 function statusClr(s) {
   if (["Pursuing","Submitted","Won"].includes(s)) return BLUE;
@@ -174,7 +293,6 @@ function statusClr(s) {
   return CHAR;
 }
 
-// ── Main App ───────────────────────────────────────────────────────
 export default function App() {
   const [opps, setOpps] = useState(load);
   const [view, setView] = useState("board");
@@ -183,7 +301,7 @@ export default function App() {
   const [log, setLog] = useState("");
   const [fTier, setFTier] = useState("All");
   const [fStatus, setFStatus] = useState("All");
-  const [fState, setFState] = useState("All");
+  const [fSource, setFSource] = useState("All");
   const [sort, setSort] = useState("score");
   const [note, setNote] = useState("");
   const [apiKey, setApiKey] = useState(loadKey);
@@ -199,36 +317,59 @@ export default function App() {
   async function search() {
     if (!apiKey) { setShowKeyInput(true); return; }
     setSearching(true);
-    setLog("Searching SAM.gov…");
+    const allNew = [];
+
+    // SAM.gov
+    setLog("Searching SAM.gov for landscape architecture RFPs…");
     try {
-      const found = await fetchSAMgov(apiKey);
-      if (!found.length) throw new Error("No results — check your API key or try again");
-      const scored = found.map(f => ({ ...f, scoring: scoreOpportunity(f) }));
-      const merged = [...opps];
-      for (const op of scored) {
-        if (!merged.find(e => e.title?.toLowerCase()===op.title?.toLowerCase() && e.agency===op.agency)) merged.push(op);
-      }
-      persist(merged);
-      setLog(`${scored.length} opportunities found & scored`);
-    } catch(e) { setLog("Error: " + e.message); }
+      const sam = await fetchSAMgov(apiKey);
+      allNew.push(...sam);
+      setLog(`SAM.gov: ${sam.length} LA opportunities found. Checking COMMBUYS…`);
+    } catch(e) {
+      setLog(`SAM.gov error: ${e.message}. Trying other sources…`);
+    }
+
+    // COMMBUYS
+    try {
+      const cb = await fetchCOMMBUYS();
+      allNew.push(...cb);
+      setLog(prev => `${allNew.length} found so far. Checking City of Boston…`);
+    } catch(e) { console.warn("COMMBUYS error", e); }
+
+    // Boston.gov
+    try {
+      const bos = await fetchBoston();
+      allNew.push(...bos);
+    } catch(e) { console.warn("Boston error", e); }
+
+    // Merge (no duplicates by title+agency)
+    const merged = [...opps];
+    let added = 0;
+    for (const op of allNew) {
+      const isDup = merged.some(e =>
+        e.title?.toLowerCase()===op.title?.toLowerCase() &&
+        e.agency?.toLowerCase()===op.agency?.toLowerCase()
+      );
+      if (!isDup) { merged.push(op); added++; }
+    }
+    persist(merged);
+    setLog(`Done — ${added} new LA opportunities added across SAM.gov, COMMBUYS, and City of Boston.`);
     setSearching(false);
   }
 
-  const scoreOne = (id) => {
-    persist(opps.map(o => o.id===id ? {...o, scoring: scoreOpportunity(o)} : o));
-  };
-  const scoreAll = () => persist(opps.map(o => ({...o, scoring: scoreOpportunity(o)})));
+  const scoreOne = id => persist(opps.map(o=>o.id===id?{...o,scoring:scoreOpportunity(o)}:o));
+  const scoreAll = () => persist(opps.map(o=>({...o,scoring:scoreOpportunity(o)})));
   const updateStatus = (id,s) => persist(opps.map(o=>o.id===id?{...o,status:s}:o));
-  const addNote = (id) => {
+  const addNote = id => {
     if (!note.trim()) return;
     persist(opps.map(o=>o.id===id?{...o,notes:[...(o.notes||[]),{text:note.trim(),date:new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}]}:o));
     setNote("");
   };
-  const del = (id) => { persist(opps.filter(o=>o.id!==id)); setView("board"); };
-  const addManual = (e) => {
+  const del = id => { persist(opps.filter(o=>o.id!==id)); setView("board"); };
+  const addManual = e => {
     e.preventDefault();
-    const scored = { ...form, id:`m_${Date.now()}`, status:"New", notes:[], scoring:scoreOpportunity(form), addedDate:new Date().toISOString().split("T")[0] };
-    persist([...opps, scored]);
+    const scored = {...form,id:`m_${Date.now()}`,source:"Manual",status:"New",notes:[],scoring:scoreOpportunity(form),addedDate:new Date().toISOString().split("T")[0]};
+    persist([...opps,scored]);
     setForm({title:"",agency:"",type:"RFP",location:"",state:"MA",deadline:"",budget:"",description:"",sourceUrl:"",postedDate:""});
     setView("board");
   };
@@ -236,7 +377,7 @@ export default function App() {
   const filtered = opps
     .filter(o=>fTier==="All"||o.scoring?.tier===fTier)
     .filter(o=>fStatus==="All"||o.status===fStatus)
-    .filter(o=>fState==="All"||o.state===fState)
+    .filter(o=>fSource==="All"||(o.source||"Manual")===fSource)
     .sort((a,b)=>{
       if (sort==="score") return (b.scoring?.score||0)-(a.scoring?.score||0);
       if (sort==="deadline") return (a.deadline||"zzz").localeCompare(b.deadline||"zzz");
@@ -244,19 +385,19 @@ export default function App() {
     });
 
   const stats = {
-    total: opps.length,
-    active: opps.filter(o=>["Pursuing","Submitted"].includes(o.status)).length,
-    strong: opps.filter(o=>o.scoring?.tier==="Strong Match").length,
-    unscored: opps.filter(o=>!o.scoring).length,
+    total:opps.length,
+    active:opps.filter(o=>["Pursuing","Submitted"].includes(o.status)).length,
+    strong:opps.filter(o=>o.scoring?.tier==="Strong Match").length,
+    unscored:opps.filter(o=>!o.scoring).length,
   };
 
-  const P = { background:BLUE,color:"#fff",border:`1px solid ${BLUE}`,padding:"8px 20px",fontSize:13,fontWeight:400,letterSpacing:"0.02em",cursor:"pointer",fontFamily:"inherit" };
-  const O = { background:"transparent",color:CHAR,border:`1px solid ${RULE}`,padding:"7px 18px",fontSize:12,fontWeight:400,cursor:"pointer",fontFamily:"inherit" };
-  const I = { width:"100%",padding:"8px 0",border:"none",borderBottom:`1px solid ${RULE}`,fontSize:14,fontWeight:300,background:"transparent",outline:"none",color:CHAR,fontFamily:"inherit" };
-  const L = { display:"block",fontSize:10,fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,marginBottom:6 };
-  const SE = { border:`1px solid ${RULE}`,background:"#fff",color:CHAR,fontSize:12,padding:"6px 10px",cursor:"pointer",outline:"none",fontFamily:"inherit",fontWeight:400 };
+  const P={background:BLUE,color:"#fff",border:`1px solid ${BLUE}`,padding:"8px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"};
+  const O={background:"transparent",color:CHAR,border:`1px solid ${RULE}`,padding:"7px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"};
+  const I={width:"100%",padding:"8px 0",border:"none",borderBottom:`1px solid ${RULE}`,fontSize:14,background:"transparent",outline:"none",color:CHAR,fontFamily:"inherit"};
+  const L={display:"block",fontSize:10,fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,marginBottom:6};
+  const SE={border:`1px solid ${RULE}`,background:"#fff",color:CHAR,fontSize:12,padding:"6px 10px",cursor:"pointer",outline:"none",fontFamily:"inherit"};
 
-  const op = sel ? (opps.find(o=>o.id===sel.id)||sel) : null;
+  const op = sel?(opps.find(o=>o.id===sel.id)||sel):null;
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100vh",background:"#fff"}}>
@@ -265,41 +406,55 @@ export default function App() {
       <header style={{background:"#fff",borderBottom:`1px solid ${RULE}`,padding:"0 48px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"baseline",gap:16}}>
           <span style={{fontSize:17,fontWeight:200,color:BLUE,letterSpacing:"0.01em"}}>LeBlanc Jones Landscape Architects</span>
-          <span style={{fontSize:11,color:MUTED,fontWeight:300,letterSpacing:"0.06em"}}>Public Work Pipeline</span>
+          <span style={{fontSize:11,color:MUTED,letterSpacing:"0.06em"}}>Public Work Pipeline</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          {stats.unscored>0 && <button style={O} onClick={scoreAll}>Score All ({stats.unscored})</button>}
-          <button style={O} onClick={()=>setView("add")}>Add Opportunity</button>
+          {stats.unscored>0&&<button style={O} onClick={scoreAll}>Score All ({stats.unscored})</button>}
+          <button style={O} onClick={()=>setView("add")}>Add Manually</button>
           <button style={{...O,fontSize:11,padding:"6px 12px"}} onClick={()=>setShowKeyInput(!showKeyInput)} title="SAM.gov API Key">⚙ API Key</button>
-          <button style={P} onClick={search} disabled={searching}>{searching?"Searching…":"Search SAM.gov"}</button>
+          <button style={P} onClick={search} disabled={searching}>{searching?"Searching…":"Search All Sources"}</button>
         </div>
       </header>
 
-      {/* API KEY BANNER */}
-      {showKeyInput && (
+      {/* API KEY BAR */}
+      {showKeyInput&&(
         <div style={{background:"#f0f4fb",borderBottom:`1px solid ${RULE}`,padding:"12px 48px",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
-          <span style={{fontSize:12,color:CHAR,fontWeight:400}}>SAM.gov API Key</span>
-          <input style={{...I,width:340,fontSize:12}} placeholder="Paste your free SAM.gov API key here…"
+          <span style={{fontSize:12,color:CHAR}}>SAM.gov API Key</span>
+          <input style={{...I,width:360,fontSize:12}} placeholder="SAM-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             value={apiKey} onChange={e=>setApiKey(e.target.value)}/>
-          <button style={P} onClick={()=>{ saveKey(apiKey); setShowKeyInput(false); setLog("API key saved"); }}>Save</button>
+          <button style={P} onClick={()=>{saveKey(apiKey);setShowKeyInput(false);setLog("API key saved");}}>Save</button>
           <button style={O} onClick={()=>setShowKeyInput(false)}>Cancel</button>
-          <a href="https://sam.gov/profile/details" target="_blank" rel="noreferrer" style={{fontSize:11,color:BLUE}}>Get free key at sam.gov →</a>
+          <a href="https://sam.gov/workspace/profile/account-details" target="_blank" rel="noreferrer" style={{fontSize:11,color:BLUE}}>Get free key at sam.gov →</a>
         </div>
       )}
 
-      {/* STAT BAR */}
-      <div style={{background:"#f9f9f8",borderBottom:`1px solid ${RULE}`,padding:"0 48px",height:44,display:"flex",alignItems:"center",gap:40,flexShrink:0}}>
-        {[["Total",stats.total],["Pursuing / Submitted",stats.active],["Strong Matches",stats.strong],["Unscored",stats.unscored]].map(([l,v])=>(
-          <div key={l} style={{display:"flex",alignItems:"baseline",gap:8}}>
+      {/* STATS + SOURCE LINKS */}
+      <div style={{background:"#f9f9f8",borderBottom:`1px solid ${RULE}`,padding:"0 48px",height:50,display:"flex",alignItems:"center",gap:36,flexShrink:0}}>
+        {[["Total",stats.total],["Active",stats.active],["Strong Matches",stats.strong]].map(([l,v])=>(
+          <div key={l} style={{display:"flex",alignItems:"baseline",gap:6}}>
             <span style={{fontSize:18,fontWeight:200,color:BLUE}}>{v}</span>
             <span style={{fontSize:11,color:MUTED}}>{l}</span>
           </div>
         ))}
-        {log && <span style={{marginLeft:"auto",fontSize:12,color:MUTED,fontStyle:"italic"}}>{log}</span>}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:16}}>
+          <span style={{fontSize:10,color:MUTED,letterSpacing:"0.1em",textTransform:"uppercase"}}>Browse manually:</span>
+          {[
+            ["SAM.gov","https://sam.gov/search/?index=opp&keywords=landscape+architecture&sort=-modifiedDate"],
+            ["COMMBUYS","https://www.commbuys.com/bso/external/publicBids.sdo?docType=BD&keyword=landscape&statusCode=A"],
+            ["City of Boston","https://www.boston.gov/bid-listings"],
+            ["BostonPlans","https://www.bostonplans.org/procurement/procurement-portal"],
+          ].map(([l,u])=>(
+            <a key={l} href={u} target="_blank" rel="noreferrer"
+              style={{fontSize:11,color:BLUE,textDecoration:"none",borderBottom:`1px solid transparent`}}
+              onMouseEnter={e=>e.target.style.borderBottomColor=BLUE}
+              onMouseLeave={e=>e.target.style.borderBottomColor="transparent"}>{l} ↗</a>
+          ))}
+        </div>
+        {log&&<span style={{marginLeft:16,fontSize:11,color:MUTED,fontStyle:"italic",maxWidth:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{log}</span>}
       </div>
 
       {/* FILTER BAR */}
-      {view==="board" && (
+      {view==="board"&&(
         <div style={{background:"#fff",borderBottom:`1px solid ${RULE}`,padding:"0 48px",height:44,display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
           <span style={{fontSize:11,color:MUTED,marginRight:4}}>Filter</span>
           <select style={SE} value={fTier} onChange={e=>setFTier(e.target.value)}>
@@ -308,11 +463,11 @@ export default function App() {
           <select style={SE} value={fStatus} onChange={e=>setFStatus(e.target.value)}>
             <option value="All">All Statuses</option>{STATUSES.map(s=><option key={s}>{s}</option>)}
           </select>
-          <select style={SE} value={fState} onChange={e=>setFState(e.target.value)}>
-            <option value="All">All States</option>{STATES.map(s=><option key={s}>{s}</option>)}
+          <select style={SE} value={fSource} onChange={e=>setFSource(e.target.value)}>
+            <option value="All">All Sources</option>{SOURCES.map(s=><option key={s}>{s}</option>)}
           </select>
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:11,color:MUTED}}>Sort by</span>
+            <span style={{fontSize:11,color:MUTED}}>Sort</span>
             <select style={SE} value={sort} onChange={e=>setSort(e.target.value)}>
               <option value="score">Fit Score</option>
               <option value="deadline">Deadline</option>
@@ -324,30 +479,21 @@ export default function App() {
       )}
 
       {/* BOARD */}
-      {view==="board" && (
+      {view==="board"&&(
         <div style={{flex:1,overflowY:"auto",padding:"32px 48px"}}>
-          {filtered.length===0 ? (
-            <div style={{textAlign:"center",padding:"100px 0"}}>
-              <div style={{fontSize:13,color:MUTED,marginBottom:20}}>
-                {opps.length===0 ? "No opportunities yet." : "No results match your filters."}
-              </div>
-              {opps.length===0 && (
-                <div>
-                  <p style={{fontSize:12,color:MUTED,marginBottom:16}}>
-                    To search SAM.gov, you need a free API key.<br/>
-                    <a href="https://sam.gov/profile/details" target="_blank" rel="noreferrer" style={{color:BLUE}}>
-                      Get yours free at sam.gov →
-                    </a> (no credit card)
-                  </p>
-                  <button style={P} onClick={()=>setShowKeyInput(true)}>Enter API Key & Search</button>
-                </div>
-              )}
+          {filtered.length===0?(
+            <div style={{textAlign:"center",padding:"80px 0"}}>
+              <p style={{fontSize:13,color:MUTED,marginBottom:8}}>No opportunities yet.</p>
+              <p style={{fontSize:12,color:"#ccc",marginBottom:24}}>
+                Click <strong>Search All Sources</strong> to pull live landscape architecture RFPs from SAM.gov, COMMBUYS, and the City of Boston.
+              </p>
+              <button style={P} onClick={search} disabled={searching}>{searching?"Searching…":"Search All Sources"}</button>
             </div>
-          ) : (
+          ):(
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead>
                 <tr style={{borderBottom:`2px solid ${CHAR}`}}>
-                  {["Score","Project","Agency","Location","Deadline","Status",""].map(h=>(
+                  {["Score","Project","Agency / Source","Location","Deadline","Status",""].map(h=>(
                     <th key={h} style={{padding:"6px 14px 12px",textAlign:"left",fontSize:10,fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr>
@@ -356,27 +502,32 @@ export default function App() {
                 {filtered.map(o=>(
                   <tr key={o.id}
                     onClick={()=>{setSel(o);setView("detail");}}
-                    style={{borderBottom:`1px solid ${RULE}`,cursor:"pointer",background:"#fff"}}
+                    style={{borderBottom:`1px solid ${RULE}`,cursor:"pointer"}}
                     onMouseEnter={e=>e.currentTarget.style.background="#f7f9fc"}
                     onMouseLeave={e=>e.currentTarget.style.background="#fff"}
                   >
-                    <td style={{padding:"14px",width:60}}>
+                    <td style={{padding:"14px",width:56}}>
                       {o.scoring
-                        ? <Ring score={o.scoring.score} size={42}/>
-                        : <button style={{...O,padding:"4px 10px",fontSize:10}} onClick={e=>{e.stopPropagation();scoreOne(o.id);}}>Score</button>
+                        ?<Ring score={o.scoring.score} size={42}/>
+                        :<button style={{...O,padding:"4px 10px",fontSize:10}} onClick={e=>{e.stopPropagation();scoreOne(o.id);}}>Score</button>
                       }
                     </td>
-                    <td style={{padding:"14px",maxWidth:300}}>
-                      <div style={{fontSize:14,fontWeight:400,color:"#000",lineHeight:1.35,marginBottom:3}}>{o.title}</div>
-                      {o.scoring && <Dots tier={o.scoring.tier}/>}
+                    <td style={{padding:"14px",maxWidth:320}}>
+                      <div style={{fontSize:14,fontWeight:400,color:"#000",lineHeight:1.35,marginBottom:4}}>{o.title}</div>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        {o.scoring&&<Dots tier={o.scoring.tier}/>}
+                      </div>
                     </td>
-                    <td style={{padding:"14px",fontSize:13,color:CHAR,fontWeight:300,maxWidth:200}}>{o.agency}</td>
+                    <td style={{padding:"14px",maxWidth:200}}>
+                      <div style={{fontSize:13,color:CHAR,fontWeight:300,marginBottom:4}}>{o.agency}</div>
+                      <SourceBadge source={o.source}/>
+                    </td>
                     <td style={{padding:"14px",fontSize:12,color:MUTED,whiteSpace:"nowrap"}}>{o.location}</td>
                     <td style={{padding:"14px",fontSize:12,color:MUTED,whiteSpace:"nowrap"}}>
                       {o.deadline&&o.deadline!=="TBD"?o.deadline:<span style={{color:"#ccc"}}>TBD</span>}
                     </td>
                     <td style={{padding:"14px"}}>
-                      <span style={{fontSize:11,fontWeight:400,color:statusClr(o.status)}}>{o.status}</span>
+                      <span style={{fontSize:11,color:statusClr(o.status)}}>{o.status}</span>
                     </td>
                     <td style={{padding:"14px",textAlign:"right",color:"#ccc",fontSize:16}}>›</td>
                   </tr>
@@ -388,60 +539,59 @@ export default function App() {
       )}
 
       {/* DETAIL */}
-      {view==="detail" && op && (
-        <div style={{flex:1,overflowY:"auto",padding:"40px 48px",maxWidth:800}}>
-          <button style={{...O,marginBottom:36,fontSize:12}} onClick={()=>setView("board")}>← Back to Pipeline</button>
-          <div style={{marginBottom:36}}>
+      {view==="detail"&&op&&(
+        <div style={{flex:1,overflowY:"auto",padding:"40px 48px",maxWidth:820}}>
+          <button style={{...O,marginBottom:36}} onClick={()=>setView("board")}>← Back to Pipeline</button>
+          <div style={{marginBottom:32}}>
             <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-              <span style={{fontSize:11,color:MUTED,border:`1px solid ${RULE}`,padding:"2px 9px"}}>{op.type}</span>
-              <span style={{fontSize:11,color:MUTED,border:`1px solid ${RULE}`,padding:"2px 9px"}}>{op.state}</span>
-              {op.scoring && <Pill rec={op.scoring.recommendation}/>}
+              <span style={{fontSize:11,color:MUTED,border:`1px solid ${RULE}`,padding:"2px 9px"}}>{op.type||"RFP"}</span>
+              {op.state&&<span style={{fontSize:11,color:MUTED,border:`1px solid ${RULE}`,padding:"2px 9px"}}>{op.state}</span>}
+              <SourceBadge source={op.source}/>
+              {op.scoring&&<Pill rec={op.scoring.recommendation}/>}
               <span style={{fontSize:11,color:statusClr(op.status)}}>{op.status}</span>
             </div>
             <h1 style={{fontSize:26,fontWeight:200,color:"#000",lineHeight:1.3,marginBottom:8}}>{op.title}</h1>
             <div style={{fontSize:14,color:MUTED,fontWeight:300}}>{op.agency} · {op.location}</div>
           </div>
           <div style={{borderTop:`1px solid ${RULE}`}}/>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"28px 0"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"24px 0"}}>
             {[["Deadline",op.deadline||"TBD"],["Budget",op.budget||"Not disclosed"],["Posted",op.postedDate||"—"]].map(([l,v])=>(
               <div key={l}><span style={L}>{l}</span><span style={{fontSize:14,fontWeight:300,color:CHAR}}>{v}</span></div>
             ))}
           </div>
           <div style={{borderTop:`1px solid ${RULE}`}}/>
-          <div style={{padding:"28px 0"}}>
+          <div style={{padding:"24px 0"}}>
             <span style={L}>Description</span>
-            <p style={{fontSize:14,lineHeight:1.75,fontWeight:300,color:CHAR}}>{op.description||"No description available."}</p>
-            {op.sourceUrl && <a href={op.sourceUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:14,fontSize:12,color:BLUE}}>View on SAM.gov →</a>}
+            <p style={{fontSize:14,lineHeight:1.75,fontWeight:300,color:CHAR,marginBottom:14}}>{op.description||"No description available."}</p>
+            {op.sourceUrl&&<a href={op.sourceUrl} target="_blank" rel="noreferrer" style={{fontSize:12,color:BLUE}}>View original posting →</a>}
           </div>
           <div style={{borderTop:`1px solid ${RULE}`}}/>
-          <div style={{padding:"28px 0"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+          <div style={{padding:"24px 0"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
               <span style={L}>Fit Analysis</span>
-              <button style={P} onClick={()=>scoreOne(op.id)}>Re-Score</button>
+              <button style={O} onClick={()=>scoreOne(op.id)}>Re-Score</button>
             </div>
-            {op.scoring ? (
-              <div>
-                <div style={{display:"flex",alignItems:"center",gap:24,marginBottom:20}}>
-                  <Ring score={op.scoring.score} size={64}/>
-                  <div><Dots tier={op.scoring.tier}/><div style={{marginTop:10}}><Pill rec={op.scoring.recommendation}/></div></div>
-                </div>
-                <p style={{fontSize:13,color:MUTED,lineHeight:1.6}}>
-                  Score based on design keyword match, geography, budget indicators, and solicitation type.
+            {op.scoring?(
+              <div style={{display:"flex",alignItems:"center",gap:24}}>
+                <Ring score={op.scoring.score} size={64}/>
+                <div><Dots tier={op.scoring.tier}/><div style={{marginTop:10}}><Pill rec={op.scoring.recommendation}/></div></div>
+                <p style={{fontSize:12,color:MUTED,lineHeight:1.6,maxWidth:400}}>
+                  Scored on design keyword relevance, New England geography, estimated budget, and solicitation type.
                 </p>
               </div>
-            ) : <p style={{fontSize:13,color:"#ccc"}}>No analysis yet.</p>}
+            ):<p style={{fontSize:13,color:"#ccc"}}>Not scored yet.</p>}
           </div>
           <div style={{borderTop:`1px solid ${RULE}`}}/>
-          <div style={{padding:"28px 0"}}>
+          <div style={{padding:"24px 0"}}>
             <span style={{...L,marginBottom:14}}>Status</span>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:32}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:28}}>
               {STATUSES.map(s=>(
                 <button key={s} style={{...O,borderColor:op.status===s?BLUE:RULE,color:op.status===s?BLUE:CHAR,fontWeight:op.status===s?500:400,fontSize:12}}
                   onClick={()=>updateStatus(op.id,s)}>{s}</button>
               ))}
             </div>
             <span style={{...L,marginBottom:12}}>Notes</span>
-            {!(op.notes||[]).length && <p style={{fontSize:12,color:"#ccc",marginBottom:16}}>No notes yet.</p>}
+            {!(op.notes||[]).length&&<p style={{fontSize:12,color:"#ccc",marginBottom:16}}>No notes yet.</p>}
             {(op.notes||[]).map((n,i)=>(
               <div key={i} style={{borderLeft:`2px solid ${RULE}`,paddingLeft:16,marginBottom:14}}>
                 <p style={{fontSize:13,fontWeight:300,color:CHAR,lineHeight:1.6}}>{n.text}</p>
@@ -455,16 +605,16 @@ export default function App() {
             </div>
           </div>
           <div style={{borderTop:`1px solid ${RULE}`,paddingTop:24,textAlign:"right"}}>
-            <button style={{...O,color:"#ccc",borderColor:RULE,fontSize:11}} onClick={()=>{if(window.confirm("Remove?"))del(op.id);}}>Remove from Pipeline</button>
+            <button style={{...O,color:"#ccc",fontSize:11}} onClick={()=>{if(window.confirm("Remove this opportunity?"))del(op.id);}}>Remove from Pipeline</button>
           </div>
         </div>
       )}
 
       {/* ADD FORM */}
-      {view==="add" && (
+      {view==="add"&&(
         <div style={{flex:1,overflowY:"auto",padding:"40px 48px",maxWidth:680}}>
           <button style={{...O,marginBottom:36}} onClick={()=>setView("board")}>← Back</button>
-          <h2 style={{fontSize:22,fontWeight:200,color:"#000",marginBottom:36}}>Add Opportunity</h2>
+          <h2 style={{fontSize:22,fontWeight:200,color:"#000",marginBottom:36}}>Add Opportunity Manually</h2>
           <form onSubmit={addManual}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"28px 32px"}}>
               {[["title","Project Title",2,"text"],["agency","Issuing Agency",2,"text"],["location","City, State",1,"text"],["state","State",1,"text"],["deadline","Deadline",1,"date"],["budget","Budget / Fee",1,"text"],["postedDate","Date Posted",1,"date"]].map(([k,label,span,type])=>(
@@ -495,7 +645,6 @@ export default function App() {
           </form>
         </div>
       )}
-
     </div>
   );
 }
