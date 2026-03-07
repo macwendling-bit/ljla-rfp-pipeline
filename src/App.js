@@ -231,7 +231,22 @@ function scoreOpportunity(opp) {
   const SOURCE_CITY_GEO = {
     'City of Boston':   { score: 25, label: 'Boston Metro' },
     'Watertown MA':     { score: 25, label: 'Boston Metro' },
+    'Somerville MA':    { score: 25, label: 'Boston Metro' },
+    'Lexington MA':     { score: 25, label: 'Boston Metro' },
+    'Concord MA':       { score: 25, label: 'Boston Metro' },
+    'Needham MA':       { score: 25, label: 'Boston Metro' },
+    'Falmouth MA':      { score: 22, label: 'Cape Cod' },
+    'Chatham MA':       { score: 22, label: 'Cape Cod' },
+    'Gloucester MA':    { score: 22, label: 'North Shore MA' },
+    'Salem MA':         { score: 22, label: 'North Shore MA' },
+    'Newburyport MA':   { score: 22, label: 'North Shore MA' },
+    'Marblehead MA':    { score: 22, label: 'North Shore MA' },
+    'Hingham MA':       { score: 22, label: 'South Shore MA' },
+    'Cohasset MA':      { score: 22, label: 'South Shore MA' },
+    'Duxbury MA':       { score: 22, label: 'South Shore MA' },
+    'Scituate MA':      { score: 22, label: 'South Shore MA' },
     'Portsmouth NH':    { score: 18, label: 'NH Coast/Lakes' },
+    'Providence RI':    { score: 18, label: 'RI Coast' },
   };
   const geo = SOURCE_CITY_GEO[opp.source] || getGeoScore(searchText);
 
@@ -386,9 +401,10 @@ export default function App() {
   }
 
   // ── City portal fetch helper ───────────────────────────────────────────────
+  // Uses our Railway server-side proxy — no CORS restrictions, real browser headers
   async function fetchViaProxy(url) {
-    const proxy = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-    const res = await fetch(proxy);
+    const res = await fetch(`/api/fetch?url=${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
     return res.text();
   }
 
@@ -461,6 +477,142 @@ export default function App() {
     return allOpps.map(o => ({ ...o, scoring: scoreOpportunity(o) }));
   }
 
+  // ── CivicEngage generic parser ─────────────────────────────────────────────
+  // Used by: Falmouth, Chatham, Lexington, Concord, Needham, Salem, Gloucester,
+  //          and dozens more New England towns. URL pattern: town.gov/Bids.aspx
+  async function fetchCivicEngage(townName, baseUrl, agency) {
+    const allOpps = [];
+    const seenTitles = new Set();
+    setLoadingMsg(`${townName}: fetching bids…`);
+    try {
+      const html = await fetchViaProxy(baseUrl);
+      // CivicEngage structure: <div class="listItemsRow bid"> ... <div class="bidTitle"><span><a href="bids.aspx?bidID=N">Title</a>
+      const bidBlocks = html.split(/class="listItemsRow bid/i);
+      const origin = new URL(baseUrl).origin;
+
+      for (let i = 1; i < bidBlocks.length; i++) {
+        const block = bidBlocks[i];
+        // Title + link
+        const titleMatch = block.match(/href="(bids\.aspx\?bidID=\d+|Bids\.aspx\?bidID=\d+)"[^>]*>([^<]{5,200})<\/a>/i)
+                        || block.match(/href="([^"]*bidID=\d+)"[^>]*>([^<]{5,200})<\/a>/i);
+        if (!titleMatch) continue;
+        const linkPath = titleMatch[1];
+        const title = titleMatch[2].replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim();
+        const link = linkPath.startsWith('http') ? linkPath : `${origin}/${linkPath}`;
+
+        // Description
+        const descMatch = block.match(/<span>([^<]{10,300})<\/span>/);
+        const description = descMatch ? descMatch[1].replace(/&amp;/g,'&').trim() : '';
+
+        // Deadline
+        const dateMatch = block.match(/Closes?[:\s]*([A-Z][a-z]+\s+\d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i)
+                       || block.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+        const deadline = dateMatch ? dateMatch[1] : '';
+
+        // Status — skip closed/awarded
+        if (/class="bidStatusClosed"|Closed|Awarded|Cancelled/i.test(block.substring(0, 500))) continue;
+
+        const titleKey = title.toLowerCase().substring(0, 60);
+        if (!seenTitles.has(titleKey) && title.length > 5) {
+          seenTitles.add(titleKey);
+          allOpps.push({
+            id: `${townName.toLowerCase().replace(/\s+/g,'-')}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+            source: townName,
+            title,
+            agency,
+            deadline,
+            link,
+            description,
+            type: /rfp|request for proposal/i.test(title + description) ? 'RFP' : /rfq|qualifications/i.test(title + description) ? 'RFQ' : 'Bid',
+            status: 'New',
+            notes: '',
+            searchedAt: new Date().toISOString(),
+          });
+        }
+      }
+    } catch(e) { console.warn(`${townName} CivicEngage fetch failed:`, e.message); }
+    return allOpps.map(o => ({ ...o, scoring: scoreOpportunity(o) }));
+  }
+
+  // ── Somerville MA fetch ────────────────────────────────────────────────────
+  async function fetchSomerville() {
+    const allOpps = [];
+    const seenTitles = new Set();
+    setLoadingMsg('Somerville MA: fetching bids…');
+    try {
+      const html = await fetchViaProxy('https://www.somervillema.gov/departments/finance/purchasing/bids-and-proposals');
+      // Somerville uses standard HTML list/table layout
+      const blocks = html.split(/<(?:article|div class="view-row|li class)/i);
+      for (const block of blocks) {
+        const titleMatch = block.match(/<a[^>]+href="([^"]+)"[^>]*>([^<]{10,200})<\/a>/i);
+        if (!titleMatch) continue;
+        const rawTitle = titleMatch[2].replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').trim();
+        if (rawTitle.length < 8) continue;
+        const href = titleMatch[1];
+        const link = href.startsWith('http') ? href : `https://www.somervillema.gov${href}`;
+        const dateMatch = block.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
+        const deadline = dateMatch ? dateMatch[0] : '';
+        const titleKey = rawTitle.toLowerCase().substring(0, 60);
+        if (!seenTitles.has(titleKey)) {
+          seenTitles.add(titleKey);
+          allOpps.push({
+            id: `somerville-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+            source: 'Somerville MA',
+            title: rawTitle,
+            agency: 'City of Somerville',
+            deadline,
+            link,
+            description: block.replace(/<[^>]+>/g,' ').trim().substring(0, 200),
+            type: /rfp|proposal/i.test(rawTitle) ? 'RFP' : /rfq|qualifications/i.test(rawTitle) ? 'RFQ' : 'Bid',
+            status: 'New',
+            notes: '',
+            searchedAt: new Date().toISOString(),
+          });
+        }
+      }
+    } catch(e) { console.warn('Somerville fetch failed:', e.message); }
+    return allOpps.map(o => ({ ...o, scoring: scoreOpportunity(o) }));
+  }
+
+  // ── Providence RI fetch ────────────────────────────────────────────────────
+  async function fetchProvidence() {
+    const allOpps = [];
+    const seenTitles = new Set();
+    setLoadingMsg('Providence RI: fetching solicitations…');
+    try {
+      const html = await fetchViaProxy('https://www.providenceri.gov/purchasing/solicitations/');
+      const blocks = html.split(/<(?:tr|li|article|div class="[^"]*(?:row|item|entry)[^"]*")/i);
+      for (const block of blocks) {
+        const titleMatch = block.match(/<a[^>]+href="([^"]+)"[^>]*>([^<]{10,200})<\/a>/i);
+        if (!titleMatch) continue;
+        const rawTitle = titleMatch[2].replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').trim();
+        if (rawTitle.length < 8) continue;
+        const href = titleMatch[1];
+        const link = href.startsWith('http') ? href : `https://www.providenceri.gov${href}`;
+        const dateMatch = block.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
+        const deadline = dateMatch ? dateMatch[0] : '';
+        const titleKey = rawTitle.toLowerCase().substring(0, 60);
+        if (!seenTitles.has(titleKey)) {
+          seenTitles.add(titleKey);
+          allOpps.push({
+            id: `providence-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+            source: 'Providence RI',
+            title: rawTitle,
+            agency: 'City of Providence',
+            deadline,
+            link,
+            description: block.replace(/<[^>]+>/g,' ').trim().substring(0, 200),
+            type: /rfp|proposal/i.test(rawTitle) ? 'RFP' : /rfq|qualifications/i.test(rawTitle) ? 'RFQ' : 'Bid',
+            status: 'New',
+            notes: '',
+            searchedAt: new Date().toISOString(),
+          });
+        }
+      }
+    } catch(e) { console.warn('Providence fetch failed:', e.message); }
+    return allOpps.map(o => ({ ...o, scoring: scoreOpportunity(o) }));
+  }
+
   // ── City of Boston fetch ───────────────────────────────────────────────────
   async function fetchBoston() {
     const allOpps = [];
@@ -476,9 +628,8 @@ export default function App() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.text();
       } catch (e) {
-        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
-        const res = await fetch(proxyUrl);
-        return await res.text();
+        // Fallback to our server-side proxy
+        return await fetchViaProxy(targetUrl);
       }
     }
 
@@ -571,23 +722,58 @@ export default function App() {
 
   // ── Main search handler ────────────────────────────────────────────────────
   const runSearch = useCallback(async () => {
-    if (!apiKey) {
-      setShowApiKey(true);
-      return;
-    }
     setLoading(true);
     setError(null);
 
+    // CivicEngage towns — each needs base URL + agency name
+    const civicEngageTowns = [
+      ['Falmouth MA',  'https://www.falmouthma.gov/Bids.aspx',       'Town of Falmouth'],
+      ['Chatham MA',   'https://www.chatham-ma.gov/Bids.aspx',        'Town of Chatham'],
+      ['Lexington MA', 'https://www.lexingtonma.gov/Bids.aspx',       'Town of Lexington'],
+      ['Concord MA',   'https://www.concordma.gov/Bids.aspx',         'Town of Concord'],
+      ['Needham MA',   'https://www.needhamma.gov/Bids.aspx',         'Town of Needham'],
+      ['Gloucester MA','https://www.gloucester-ma.gov/Bids.aspx',     'City of Gloucester'],
+      ['Salem MA',     'https://www.salemma.gov/Bids.aspx',           'City of Salem'],
+      ['Newburyport MA','https://www.cityofnewburyport.com/Bids.aspx','City of Newburyport'],
+      ['Marblehead MA','https://www.marblehead.org/Bids.aspx',        'Town of Marblehead'],
+      ['Hingham MA',   'https://www.hingham-ma.gov/Bids.aspx',        'Town of Hingham'],
+      ['Cohasset MA',  'https://www.cohassetma.org/Bids.aspx',        'Town of Cohasset'],
+      ['Duxbury MA',   'https://www.town.duxbury.ma.us/Bids.aspx',    'Town of Duxbury'],
+      ['Scituate MA',  'https://www.scituatema.gov/Bids.aspx',        'Town of Scituate'],
+    ];
+
     try {
       setLoadingMsg('Starting search across all sources…');
-      const [samResults, watertownResults, portsmouthResults, bostonResults] = await Promise.all([
-        fetchSAM(apiKey),
+
+      // Run all sources in parallel
+      const [
+        samResults,
+        watertownResults,
+        portsmouthResults,
+        somervilleResults,
+        providenceResults,
+        bostonResults,
+        ...civicResults
+      ] = await Promise.all([
+        apiKey ? fetchSAM(apiKey) : Promise.resolve([]),
         fetchWatertown(),
         fetchPortsmouth(),
+        fetchSomerville(),
+        fetchProvidence(),
         fetchBoston(),
+        ...civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency)),
       ]);
 
-      const newResults = [...samResults, ...watertownResults, ...portsmouthResults, ...bostonResults];
+      const civicFlat = civicResults.flat();
+      const newResults = [
+        ...samResults,
+        ...watertownResults,
+        ...portsmouthResults,
+        ...somervilleResults,
+        ...providenceResults,
+        ...bostonResults,
+        ...civicFlat,
+      ];
 
       // Merge with existing (preserve notes/status, don't duplicate)
       setResults(prev => {
@@ -683,7 +869,7 @@ export default function App() {
             LeBlanc Jones Landscape Architects
           </div>
           <div style={{ color: BRAND.muted, fontSize: 11, marginTop: 2 }}>
-            Public Work Pipeline · SAM.gov · Boston · Watertown MA · Portsmouth NH
+            Public Work Pipeline · Boston · Watertown · Portsmouth · Somerville · Providence · 13 CivicEngage towns
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -770,10 +956,25 @@ export default function App() {
         <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
                 style={{ padding: '5px 10px', border: `1px solid ${BRAND.secondary}`, borderRadius: 4, fontSize: 12, background: '#fff' }}>
           <option value="All">All Sources</option>
-          <option value="SAM.gov">SAM.gov</option>
+          <option value="City of Boston">Boston</option>
           <option value="Watertown MA">Watertown MA</option>
+          <option value="Somerville MA">Somerville MA</option>
+          <option value="Lexington MA">Lexington MA</option>
+          <option value="Concord MA">Concord MA</option>
+          <option value="Needham MA">Needham MA</option>
+          <option value="Falmouth MA">Falmouth MA</option>
+          <option value="Chatham MA">Chatham MA</option>
+          <option value="Gloucester MA">Gloucester MA</option>
+          <option value="Salem MA">Salem MA</option>
+          <option value="Newburyport MA">Newburyport MA</option>
+          <option value="Marblehead MA">Marblehead MA</option>
+          <option value="Hingham MA">Hingham MA</option>
+          <option value="Cohasset MA">Cohasset MA</option>
+          <option value="Duxbury MA">Duxbury MA</option>
+          <option value="Scituate MA">Scituate MA</option>
           <option value="Portsmouth NH">Portsmouth NH</option>
-          <option value="City of Boston">City of Boston</option>
+          <option value="Providence RI">Providence RI</option>
+          <option value="SAM.gov">SAM.gov</option>
           <option value="Manual">Manual</option>
         </select>
 
@@ -935,7 +1136,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding: '24px 32px', color: BRAND.muted, fontSize: 11, borderTop: `1px solid ${BRAND.border}`, textAlign: 'center' }}>
-        LJLA RFP Pipeline v10 · {results.length} total · {filtered.length} showing
+        LJLA RFP Pipeline v11 · {results.length} total · {filtered.length} showing
         · Scoring: Design 35pts · Geography 25pts · Budget 20pts · Type 20pts
         · Geography covers 153 municipalities across 14 subregions (MA, ME, NH, RI, CT, NY, NJ, PA)
       </div>
