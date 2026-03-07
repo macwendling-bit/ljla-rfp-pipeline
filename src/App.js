@@ -1,13 +1,17 @@
+// Poppins font loaded via index.html or inline
 import React, { useState, useEffect, useCallback } from 'react';
 
 // ─── LJLA BRAND COLORS ────────────────────────────────────────────────────────
 const BRAND = {
-  primary: '#2C4A3E',
-  secondary: '#8B9E6E',
-  accent: '#C4A882',
-  light: '#F5F1EB',
-  text: '#1A2E28',
-  muted: '#6B7B6E',
+  primary: '#3C75BF',    // LJLA blue — from logo/nav text on leblancjones.com
+  secondary: '#575759',  // Body text grey from site
+  accent: '#3C75BF',     // Same blue for accents
+  light: '#FFFFFF',      // White background
+  text: '#1A1A1A',       // Near-black text
+  muted: '#888888',      // Muted grey
+  border: '#E8E8E8',     // Light border
+  bg: '#F7F7F7',         // Off-white page bg
+};
 };
 
 // ─── BD MAP: TARGET GEOGRAPHY BY SUBREGION ────────────────────────────────────
@@ -140,24 +144,50 @@ const DESIGN_KEYWORDS = {
     'rooftop garden','rooftop amenity','pool terrace','outdoor amenity','shared garden',
     'mixed use landscape','transit-oriented landscape','developer landscape',
   ],
-  // Supporting keywords — relevant but less specific
+  // Supporting keywords — relevant but less specific (still design-adjacent)
   supporting: [
     'open space','outdoor space','landscape improvement','landscape restoration',
-    'pedestrian design','pedestrian realm','outdoor environment','recreation landscape',
+    'pedestrian design','pedestrian realm','outdoor environment',
     'trail design','greenway design','community park','neighborhood park',
     'coastal landscape','resilient landscape','sustainable landscape',
+    'green infrastructure','urban forestry','tree planting','bioretention',
+    'rain garden','permeable','stormwater design',
   ],
 };
 
-// NEGATIVE SIGNALS — pure infrastructure, not design-led
+// CITY PORTAL INTAKE FILTER — must match at least one to be ingested at all
+// These are design/planning signals. Without one, the bid is construction/maintenance noise.
+const CITY_PORTAL_REQUIRED = [
+  'landscape architect','landscape architecture','landscape design','planting design',
+  'site design','park design','plaza design','streetscape design','waterfront design',
+  'open space design','greenway design','trail design','outdoor amenity',
+  'park','plaza','waterfront','promenade','greenway','streetscape',
+  'playground design','playground renovation','playfield','recreation design',
+  'garden','grounds design','courtyard','outdoor space improvement',
+  'pedestrian improvement','bike path','bikeway','multiuse path',
+  'planning and design','design services','rfp','request for proposal','request for qualifications',
+];
+};
+
+// NEGATIVE SIGNALS — discard entirely if title matches these
 const NEGATIVE_KEYWORDS = [
-  'construction only','general contractor','grading only','excavation','earthwork',
-  'paving contractor','concrete contractor','utility installation','sewer installation',
-  'stormwater pipe','drainage pipe','retaining wall construction','fencing installation',
-  'snow removal','janitorial','custodial','food service','information technology',
-  'cybersecurity','medical supply','pharmaceutical','ammunition','weapons system',
-  'military','defense contract','roofing','hvac','plumbing contractor',
-  'electrical contractor','telecommunications','it services',
+  // Maintenance (not design)
+  'maintenance','mowing','lawn care','grounds keeping','snow removal','plowing','salting','sanding',
+  'janitorial','custodial','cleaning services','waste removal','trash','rubbish',
+  'landscape maintenance','turf management','pest control',
+  // Pure construction trades (no design component)
+  'roofing','hvac','plumbing','electrical contractor','telecommunications','it services',
+  'information technology','cybersecurity','software','hardware','network',
+  'generator','elevator','boiler','mechanical','fire suppression',
+  // Infrastructure/civil (not LA)
+  'water main','sewer','drainage pipe','stormwater pipe','roadway construction',
+  'paving','asphalt','concrete contractor','crack seal','pavement marking',
+  'roadway mill','overlay','patch','sidewalk repair','curb','guardrail',
+  // Unrelated services
+  'audit','accounting','legal services','insurance','food service','catering',
+  'printing','mailing','shuttle','transit','vehicle','truck','fuel',
+  'medical','pharmaceutical','ammunition','weapons','military','defense',
+  'real estate broker','property management','security guard','staffing',
 ];
 
 function scoreOpportunity(opp) {
@@ -183,8 +213,11 @@ function scoreOpportunity(opp) {
     designScore = Math.min(35, designScore + multifamilyMatches.length * 5);
     designMatches.push(...multifamilyMatches.slice(0, 1));
   }
-  if (supportingMatches.length > 0 && designScore > 0) {
-    designScore = Math.min(35, designScore + supportingMatches.length * 2);
+  // Supporting keywords score even without a primary match
+  if (supportingMatches.length > 0) {
+    const bonus = supportingMatches.length * 4;
+    designScore = Math.min(35, designScore + bonus);
+    if (designMatches.length === 0) designMatches.push(...supportingMatches.slice(0, 2));
   }
 
   // Negative signals — significant penalty
@@ -194,7 +227,13 @@ function scoreOpportunity(opp) {
   }
 
   // Geography score (up to 25 pts)
-  const geo = getGeoScore(searchText);
+  // First check if source is a known city portal — use that city directly
+  const SOURCE_CITY_GEO = {
+    'City of Boston':   { score: 25, label: 'Boston Metro' },
+    'Watertown MA':     { score: 25, label: 'Boston Metro' },
+    'Portsmouth NH':    { score: 18, label: 'NH Coast/Lakes' },
+  };
+  const geo = SOURCE_CITY_GEO[opp.source] || getGeoScore(searchText);
 
   // Budget score (up to 20 pts)
   let budgetScore = 0;
@@ -205,14 +244,17 @@ function scoreOpportunity(opp) {
   else if (amtNum >= 200000) { budgetScore = 14; budgetLabel = '$200K+'; }
   else if (amtNum >= 50000) { budgetScore = 7; budgetLabel = '$50K+'; }
   else if (amtNum > 0) { budgetScore = 3; budgetLabel = `$${Math.round(amtNum/1000)}K`; }
+  // City portal bids without budget data — give base score
+  else if (opp.source !== 'SAM.gov') { budgetScore = 7; budgetLabel = 'Est. public bid'; }
 
   // Solicitation type score (up to 20 pts)
   let typeScore = 0;
-  const typeStr = (opp.type || opp.solicitation_type || '').toLowerCase();
-  if (typeStr.includes('rfp') || typeStr.includes('request for proposal')) typeScore = 20;
-  else if (typeStr.includes('rfq') || typeStr.includes('request for qualif')) typeScore = 16;
+  const typeStr = (opp.type || opp.solicitation_type || opp.title || '').toLowerCase();
+  const titleLower = (opp.title || '').toLowerCase();
+  if (typeStr.includes('rfp') || titleLower.includes('rfp') || typeStr.includes('request for proposal')) typeScore = 20;
+  else if (typeStr.includes('rfq') || titleLower.includes('rfq') || typeStr.includes('request for qualif')) typeScore = 16;
   else if (typeStr.includes('rfi')) typeScore = 8;
-  else if (typeStr.includes('solicitation') || typeStr.includes('bid')) typeScore = 12;
+  else if (typeStr.includes('solicitation') || typeStr.includes('bid') || opp.source !== 'SAM.gov') typeScore = 12;
   else typeScore = 10;
 
   const total = designScore + geo.score + budgetScore + typeScore;
@@ -263,7 +305,7 @@ const COMMBUYS_KEYWORDS = [
 ];
 
 // ─── STORAGE KEY ─────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'ljla_v9';
+const STORAGE_KEY = 'ljla_v10';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -369,7 +411,10 @@ export default function App() {
         const link = linkMatch ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.watertown-ma.gov${linkMatch[1]}`) : 'https://www.watertown-ma.gov/bids';
         const deadline = dateMatch ? dateMatch[0] : '';
         const titleKey = title.toLowerCase().substring(0, 60);
-        if (title && title.length > 5 && !seenTitles.has(titleKey)) {
+        const tl = title.toLowerCase();
+        const hasSignal = CITY_PORTAL_REQUIRED.some(k => tl.includes(k));
+        const hasNeg = NEGATIVE_KEYWORDS.some(k => tl.includes(k));
+        if (title && title.length > 5 && !seenTitles.has(titleKey) && hasSignal && !hasNeg) {
           seenTitles.add(titleKey);
           allOpps.push({ id: `watertown-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, source: 'Watertown MA', title, agency: 'Town of Watertown', deadline, link, description: block.replace(/<[^>]+>/g,' ').trim().substring(0,200), type: 'Bid', status: 'New', notes: '', searchedAt: new Date().toISOString() });
         }
@@ -496,7 +541,10 @@ export default function App() {
           if (deptMatch) agency = `Boston — ${deptMatch[1].trim()}`;
 
           const titleKey = (title || '').toLowerCase().substring(0, 60);
-          if (title && title.length > 4 && !seenTitles.has(titleKey)) {
+          const tl = (title || '').toLowerCase();
+          const hasSignal = CITY_PORTAL_REQUIRED.some(k => tl.includes(k));
+          const hasNeg = NEGATIVE_KEYWORDS.some(k => tl.includes(k));
+          if (title && title.length > 4 && !seenTitles.has(titleKey) && hasSignal && !hasNeg) {
             seenTitles.add(titleKey);
             allOpps.push({
               id: `boston-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
@@ -627,33 +675,32 @@ export default function App() {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ fontFamily: "'Georgia', serif", background: BRAND.light, minHeight: '100vh', color: BRAND.text }}>
-      {/* Header */}
-      <div style={{ background: BRAND.primary, padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+    <div style={{ fontFamily: "'Poppins', 'Helvetica Neue', Arial, sans-serif", background: BRAND.bg, minHeight: '100vh', color: BRAND.text }}>
+      {/* Header — clean white like leblancjones.com */}
+      <div style={{ background: '#fff', borderBottom: `1px solid ${BRAND.border}`, padding: '16px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ color: BRAND.accent, fontSize: 11, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 4 }}>
+          <div style={{ color: BRAND.primary, fontSize: 13, fontWeight: 600, letterSpacing: 0.5 }}>
             LeBlanc Jones Landscape Architects
           </div>
-          <div style={{ color: '#fff', fontSize: 20, fontWeight: 600 }}>RFP Pipeline</div>
-          <div style={{ color: BRAND.secondary, fontSize: 11, marginTop: 2 }}>
-            SAM.gov · City of Boston · Watertown MA · Portsmouth NH · Manual
+          <div style={{ color: BRAND.muted, fontSize: 11, marginTop: 2 }}>
+            Public Work Pipeline · SAM.gov · Boston · Watertown MA · Portsmouth NH
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <a href="https://sam.gov/search/?index=opp&q=landscape+architecture" target="_blank" rel="noreferrer"
-             style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>SAM.gov ↗</a>
-          <a href="https://www.commbuys.com/bso/external/bidstatus.sdo" target="_blank" rel="noreferrer"
-             style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>Watertown ↗</a>
+             style={{ color: BRAND.muted, fontSize: 11, textDecoration: 'none' }}>SAM.gov ↗</a>
+          <a href="https://www.watertown-ma.gov/bids" target="_blank" rel="noreferrer"
+             style={{ color: BRAND.muted, fontSize: 11, textDecoration: 'none' }}>Watertown ↗</a>
           <a href="https://www.boston.gov/bid-listings" target="_blank" rel="noreferrer"
-             style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>Boston.gov ↗</a>
+             style={{ color: BRAND.muted, fontSize: 11, textDecoration: 'none' }}>Boston.gov ↗</a>
           <a href="https://www.bostonplans.org/projects/development-projects" target="_blank" rel="noreferrer"
-             style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>BostonPlans ↗</a>
+             style={{ color: BRAND.muted, fontSize: 11, textDecoration: 'none' }}>BostonPlans ↗</a>
           <button onClick={() => setShowApiKey(v => !v)}
-                  style={{ background: BRAND.accent, border: 'none', color: BRAND.primary, padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  style={{ background: 'transparent', border: `1px solid ${BRAND.border}`, color: BRAND.secondary, padding: '5px 12px', borderRadius: 3, cursor: 'pointer', fontSize: 11 }}>
             ⚙ API Key
           </button>
           <button onClick={runSearch} disabled={loading}
-                  style={{ background: loading ? '#6B7B6E' : '#8B9E6E', border: 'none', color: '#fff', padding: '8px 18px', borderRadius: 4, cursor: loading ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700 }}>
+                  style={{ background: loading ? BRAND.muted : BRAND.primary, border: 'none', color: '#fff', padding: '7px 18px', borderRadius: 3, cursor: loading ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 600, letterSpacing: 0.3 }}>
             {loading ? '⟳ Searching…' : '⟳ Search All Sources'}
           </button>
         </div>
@@ -661,13 +708,13 @@ export default function App() {
 
       {/* API Key panel */}
       {showApiKey && (
-        <div style={{ background: '#fff', borderBottom: `2px solid ${BRAND.accent}`, padding: '14px 28px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ background: '#fff', borderBottom: `1px solid ${BRAND.border}`, padding: '12px 32px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 12, color: BRAND.muted }}>SAM.gov API Key:</span>
           <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
                  placeholder="SAM-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                 style={{ flex: 1, maxWidth: 420, padding: '5px 10px', border: `1px solid ${BRAND.secondary}`, borderRadius: 4, fontSize: 12 }} />
+                 style={{ flex: 1, maxWidth: 420, padding: '5px 10px', border: `1px solid ${BRAND.border}`, borderRadius: 3, fontSize: 12 }} />
           <button onClick={() => setShowApiKey(false)}
-                  style={{ background: BRAND.primary, color: '#fff', border: 'none', padding: '5px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
+                  style={{ background: BRAND.primary, color: '#fff', border: 'none', padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>
             Save
           </button>
         </div>
@@ -675,28 +722,28 @@ export default function App() {
 
       {/* Loading message */}
       {loading && (
-        <div style={{ background: BRAND.secondary, color: '#fff', padding: '8px 28px', fontSize: 12, fontStyle: 'italic' }}>
+        <div style={{ background: BRAND.primary, color: '#fff', padding: '7px 32px', fontSize: 11, opacity: 0.85 }}>
           {loadingMsg}
         </div>
       )}
 
       {/* Error */}
       {error && (
-        <div style={{ background: '#fff3f3', borderLeft: `4px solid #c44`, padding: '10px 28px', fontSize: 12, color: '#c44' }}>
+        <div style={{ background: '#fff3f3', borderLeft: `3px solid #c44`, padding: '10px 32px', fontSize: 12, color: '#c44' }}>
           ⚠ {error}
         </div>
       )}
 
       {/* Summary bar */}
       {results.length > 0 && (
-        <div style={{ background: '#fff', padding: '12px 28px', borderBottom: `1px solid ${BRAND.accent}30`, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ background: '#fff', padding: '10px 32px', borderBottom: `1px solid ${BRAND.border}`, display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center' }}>
           {Object.entries(tierCounts).map(([tier, count]) => (
-            <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+            <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
                  onClick={() => setFilter(filter === tier ? 'All' : tier)}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 
-                tier === 'Strong Match' ? BRAND.primary : tier === 'Good Match' ? BRAND.secondary : tier === 'Possible Match' ? BRAND.accent : '#ccc',
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background:
+                tier === 'Strong Match' ? BRAND.primary : tier === 'Good Match' ? '#4A90D9' : tier === 'Possible Match' ? '#AAC4E8' : '#DDD',
                 display: 'inline-block' }} />
-              <span style={{ fontSize: 12, color: filter === tier ? BRAND.primary : BRAND.muted, fontWeight: filter === tier ? 700 : 400 }}>
+              <span style={{ fontSize: 11, color: filter === tier ? BRAND.primary : BRAND.muted, fontWeight: filter === tier ? 700 : 400 }}>
                 {count} {tier}
               </span>
             </div>
@@ -708,7 +755,7 @@ export default function App() {
       )}
 
       {/* Filter bar */}
-      <div style={{ background: BRAND.light, padding: '10px 28px', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', borderBottom: `1px solid ${BRAND.accent}30` }}>
+      <div style={{ background: '#fff', padding: '10px 32px', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', borderBottom: `1px solid ${BRAND.border}` }}>
         {/* Tier filter */}
         <select value={filter} onChange={e => setFilter(e.target.value)}
                 style={{ padding: '5px 10px', border: `1px solid ${BRAND.secondary}`, borderRadius: 4, fontSize: 12, background: '#fff' }}>
@@ -780,11 +827,10 @@ export default function App() {
       )}
 
       {/* Results */}
-      <div style={{ padding: '16px 28px', maxWidth: 1200 }}>
+      <div style={{ padding: '20px 32px', maxWidth: 1100 }}>
         {filtered.length === 0 && !loading && (
-          <div style={{ textAlign: 'center', padding: '60px 20px', color: BRAND.muted }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>🌿</div>
-            <div style={{ fontSize: 15, marginBottom: 8 }}>No opportunities loaded yet.</div>
+          <div style={{ textAlign: 'center', padding: '80px 20px', color: BRAND.muted }}>
+            <div style={{ fontSize: 13, marginBottom: 8, fontWeight: 500 }}>No opportunities loaded yet.</div>
             <div style={{ fontSize: 12 }}>Set your SAM.gov API key and click Search All Sources to begin.</div>
           </div>
         )}
@@ -795,76 +841,69 @@ export default function App() {
           return (
             <div key={opp.id} style={{
               background: '#fff',
-              borderRadius: 6,
-              marginBottom: 10,
-              border: `1px solid ${sc.tierColor}40`,
-              borderLeft: `4px solid ${sc.tierColor}`,
+              borderRadius: 2,
+              marginBottom: 8,
+              border: `1px solid ${BRAND.border}`,
+              borderLeft: `3px solid ${sc.tierColor}`,
               overflow: 'hidden',
             }}>
               {/* Card header */}
-              <div style={{ padding: '12px 16px', cursor: 'pointer', display: 'grid', gridTemplateColumns: '1fr auto', gap: 12 }}
+              <div style={{ padding: '14px 20px', cursor: 'pointer', display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center' }}
                    onClick={() => setExpandedId(isExpanded ? null : opp.id)}>
                 <div>
                   {/* Title row */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: BRAND.text }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 5 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: BRAND.text, letterSpacing: 0.1 }}>
                       {opp.title}
                     </span>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: sc.tierColor, background: `${sc.tierColor}15`, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: sc.tierColor, background: `${sc.tierColor}12`, padding: '2px 8px', borderRadius: 2, whiteSpace: 'nowrap' }}>
                       {sc.tier}
                     </span>
-                    <span style={{ fontSize: 10, color: BRAND.muted, background: '#f0f0f0', padding: '2px 8px', borderRadius: 10 }}>
+                    <span style={{ fontSize: 10, color: BRAND.muted, background: BRAND.bg, padding: '2px 8px', borderRadius: 2 }}>
                       {opp.source}
                     </span>
                   </div>
 
                   {/* Meta row */}
-                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11, color: BRAND.muted }}>
-                    {opp.agency && <span>🏛 {opp.agency}</span>}
-                    {opp.deadline && <span>📅 {opp.deadline}</span>}
-                    {sc.geoLabel && <span>📍 {sc.geoLabel}</span>}
-                    {sc.matchKeywords.length > 0 && (
-                      <span style={{ color: BRAND.secondary }}>🌿 {sc.matchKeywords.join(', ')}</span>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: BRAND.muted }}>
+                    {opp.agency && <span>{opp.agency}</span>}
+                    {opp.deadline && <span>Due: {opp.deadline}</span>}
+                    {sc.geoLabel && <span>{sc.geoLabel}</span>}
+                    {sc.matchKeywords?.length > 0 && (
+                      <span style={{ color: BRAND.primary }}>{sc.matchKeywords.join(', ')}</span>
                     )}
                   </div>
                 </div>
 
                 {/* Score badge */}
-                <div style={{ textAlign: 'center', minWidth: 52 }}>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: sc.tierColor, lineHeight: 1 }}>{sc.total}</div>
-                  <div style={{ fontSize: 9, color: BRAND.muted, marginTop: 2 }}>/ 100</div>
+                <div style={{ textAlign: 'right', minWidth: 48 }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: sc.tierColor, lineHeight: 1 }}>{sc.total}</div>
+                  <div style={{ fontSize: 9, color: BRAND.muted, marginTop: 1 }}>/ 100</div>
                 </div>
               </div>
 
               {/* Expanded detail */}
               {isExpanded && (
-                <div style={{ padding: '0 16px 14px', borderTop: `1px solid ${BRAND.accent}20` }}>
+                <div style={{ padding: '0 20px 16px', borderTop: `1px solid ${BRAND.border}` }}>
                   {/* Score breakdown */}
-                  <div style={{ display: 'flex', gap: 8, margin: '10px 0', flexWrap: 'wrap' }}>
-                    <ScorePill label="Design" value={sc.designScore} max={35} color={BRAND.secondary} />
-                    <ScorePill label="Geography" value={sc.geoScore} max={25} color={BRAND.primary} />
-                    <ScorePill label="Budget" value={sc.budgetScore} max={20} color={BRAND.accent} />
-                    <ScorePill label="Type" value={sc.typeScore} max={20} color="#9BA89E" />
+                  <div style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}>
+                    <ScorePill label="Design" value={sc.designScore} max={35} color={BRAND.primary} />
+                    <ScorePill label="Geography" value={sc.geoScore} max={25} color="#4A90D9" />
+                    <ScorePill label="Budget" value={sc.budgetScore} max={20} color="#888" />
+                    <ScorePill label="Type" value={sc.typeScore} max={20} color="#AAA" />
                   </div>
 
                   {/* Description */}
                   {opp.description && (
-                    <p style={{ fontSize: 12, color: BRAND.muted, margin: '8px 0', lineHeight: 1.5 }}>
+                    <p style={{ fontSize: 12, color: BRAND.muted, margin: '8px 0', lineHeight: 1.6 }}>
                       {opp.description}
                     </p>
                   )}
 
-                  {/* Negative flags warning */}
-                  {sc.hasNegatives && (
-                    <div style={{ background: '#fff8f0', border: '1px solid #f0c060', borderRadius: 4, padding: '5px 10px', fontSize: 11, color: '#996600', marginBottom: 8 }}>
-                      ⚠ Non-design signals: {sc.negativeFlags.join(', ')}
-                    </div>
-                  )}
-
                   {/* Controls row */}
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
                     <select value={opp.status} onChange={e => updateResult(opp.id, 'status', e.target.value)}
-                            style={{ padding: '4px 8px', border: `1px solid ${BRAND.secondary}`, borderRadius: 4, fontSize: 11, background: '#fff' }}>
+                            style={{ padding: '4px 8px', border: `1px solid ${BRAND.border}`, borderRadius: 2, fontSize: 11, background: '#fff', color: BRAND.secondary }}>
                       <option value="New">New</option>
                       <option value="Review">Under Review</option>
                       <option value="Pursuing">Pursuing</option>
@@ -875,7 +914,7 @@ export default function App() {
                     </select>
                     <input value={opp.notes} onChange={e => updateResult(opp.id, 'notes', e.target.value)}
                            placeholder="Add notes…"
-                           style={{ flex: 1, minWidth: 180, padding: '4px 8px', border: `1px solid ${BRAND.secondary}`, borderRadius: 4, fontSize: 11 }} />
+                           style={{ flex: 1, minWidth: 180, padding: '4px 8px', border: `1px solid ${BRAND.border}`, borderRadius: 2, fontSize: 11 }} />
                     {opp.link && (
                       <a href={opp.link} target="_blank" rel="noreferrer"
                          style={{ color: BRAND.primary, fontSize: 11, fontWeight: 600, textDecoration: 'none' }}>
@@ -883,7 +922,7 @@ export default function App() {
                       </a>
                     )}
                     <button onClick={() => removeResult(opp.id)}
-                            style={{ background: 'none', border: `1px solid #ccc`, color: BRAND.muted, padding: '3px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
+                            style={{ background: 'none', border: `1px solid ${BRAND.border}`, color: BRAND.muted, padding: '3px 8px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>
                       Remove
                     </button>
                   </div>
@@ -895,8 +934,8 @@ export default function App() {
       </div>
 
       {/* Footer */}
-      <div style={{ padding: '20px 28px', color: BRAND.muted, fontSize: 11, borderTop: `1px solid ${BRAND.accent}30`, textAlign: 'center' }}>
-        LJLA RFP Pipeline v9 · {results.length} total · {filtered.length} showing
+      <div style={{ padding: '24px 32px', color: BRAND.muted, fontSize: 11, borderTop: `1px solid ${BRAND.border}`, textAlign: 'center' }}>
+        LJLA RFP Pipeline v10 · {results.length} total · {filtered.length} showing
         · Scoring: Design 35pts · Geography 25pts · Budget 20pts · Type 20pts
         · Geography covers 153 municipalities across 14 subregions (MA, ME, NH, RI, CT, NY, NJ, PA)
       </div>
@@ -907,10 +946,10 @@ export default function App() {
 // Score pill component
 function ScorePill({ label, value, max, color }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: `${color}15`, borderRadius: 12, padding: '3px 10px' }}>
-      <span style={{ fontSize: 10, color: color, fontWeight: 700 }}>{label}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: `${color}12`, borderRadius: 2, padding: '3px 10px' }}>
+      <span style={{ fontSize: 10, color: color, fontWeight: 600 }}>{label}</span>
       <span style={{ fontSize: 12, color: color, fontWeight: 700 }}>{value}</span>
-      <span style={{ fontSize: 9, color: `${color}99` }}>/{max}</span>
+      <span style={{ fontSize: 9, color: `${color}88` }}>/{max}</span>
     </div>
   );
 }
