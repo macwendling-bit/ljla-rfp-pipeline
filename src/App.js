@@ -240,7 +240,7 @@ function scoreOpportunity(opp) {
   };
 }
 
-// ─── SAM.GOV SEARCH KEYWORDS — LJLA-specific ──────────────────────────────────
+// ─── SAM.GOV SEARCH KEYWORDS — broader net, LJLA-relevant ────────────────────
 const SAM_SEARCHES = [
   'landscape architecture',
   'landscape architect',
@@ -256,16 +256,14 @@ const SAM_SEARCHES = [
   'outdoor amenity',
 ];
 
-// ─── COMMBUYS KEYWORDS ────────────────────────────────────────────────────────
+// ─── COMMBUYS KEYWORDS — broader net ─────────────────────────────────────────
 const COMMBUYS_KEYWORDS = [
-  'landscape architecture','landscape architect','planting design','park design',
-  'streetscape','urban design landscape','waterfront','plaza design','open space',
-  'civic landscape','outdoor amenity','site design','landscape improvement',
-  'park master plan','promenade','courtyard landscape','institutional landscape',
+  'landscape','park','streetscape','waterfront','plaza','open space',
+  'outdoor','site design','promenade','greenway','urban design',
 ];
 
 // ─── STORAGE KEY ─────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'ljla_v7';
+const STORAGE_KEY = 'ljla_v9';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -342,63 +340,79 @@ export default function App() {
     // Score and filter — drop very poor matches
     return allOpps
       .map(o => ({ ...o, scoring: scoreOpportunity(o) }))
-      .filter(o => o.scoring.total >= 15 && !o.scoring.hasNegatives);
+      .filter(o => o.scoring.total >= 10 && !o.scoring.hasNegatives);
   }
 
-  // ── COMMBUYS fetch ─────────────────────────────────────────────────────────
-  async function fetchCOMMBUYS() {
+  // ── City portal fetch helper ───────────────────────────────────────────────
+  async function fetchViaProxy(url) {
+    const proxy = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+    const res = await fetch(proxy);
+    return res.text();
+  }
+
+  // ── Watertown MA fetch ────────────────────────────────────────────────────
+  async function fetchWatertown() {
     const allOpps = [];
     const seenTitles = new Set();
-
-    for (const kw of COMMBUYS_KEYWORDS.slice(0, 10)) {
-      try {
-        setLoadingMsg(`COMMBUYS: searching "${kw}"…`);
-        const targetUrl = `https://www.commbuys.com/bso/external/bidstatus.sdo?winningBidderFlag=N&currentPage=1&sortBy=6&keyword=${encodeURIComponent(kw)}`;
-        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
-        const res = await fetch(proxyUrl);
-        const html = await res.text();
-
-        // Parse table rows
-        const rowRegex = /<tr[^>]*class="[^"]*(?:odd|even)[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
-        let match;
-        while ((match = rowRegex.exec(html)) !== null) {
-          const row = match[1];
-          const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map(c =>
-            c[1].replace(/<[^>]+>/g, '').trim()
-          );
-          if (cells.length >= 4) {
-            const title = cells[1] || cells[0] || '';
-            const agency = cells[2] || '';
-            const deadline = cells[3] || '';
-            const linkMatch = row.match(/href="([^"]*bidstatus\.sdo[^"]*)"/i);
-            const link = linkMatch
-              ? `https://www.commbuys.com${linkMatch[1].replace(/&amp;/g, '&')}`
-              : 'https://www.commbuys.com/bso/external/bidstatus.sdo';
-
-            const titleKey = title.toLowerCase().substring(0, 60);
-            if (title && title.length > 5 && !seenTitles.has(titleKey)) {
-              seenTitles.add(titleKey);
-              allOpps.push({
-                id: `commbuys-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
-                source: 'COMMBUYS',
-                title,
-                agency,
-                deadline,
-                link,
-                description: `MA State Bid — ${kw}`,
-                type: 'Solicitation',
-                status: 'New',
-                notes: '',
-                searchedAt: new Date().toISOString(),
-              });
-            }
-          }
+    setLoadingMsg('Watertown MA: fetching bids…');
+    try {
+      const html = await fetchViaProxy('https://www.watertown-ma.gov/bids');
+      // Bids are in .widgetDesc divs with h2 titles
+      const blocks = html.split('widgetDesc');
+      for (let i = 1; i < blocks.length; i++) {
+        const block = blocks[i];
+        const titleMatch = block.match(/<h2[^>]*>([^<]{5,150})<\/h2>/i);
+        const linkMatch = block.match(/href="(https?:\/\/www\.watertown-ma\.gov\/[^"]+)"/i)
+                       || block.match(/href="(\/[^"]+bids?[^"]+)"/i);
+        const dateMatch = block.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
+        const title = titleMatch ? titleMatch[1].replace(/&amp;/g,'&').replace(/&#\d+;/g,'').trim() : '';
+        const link = linkMatch ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.watertown-ma.gov${linkMatch[1]}`) : 'https://www.watertown-ma.gov/bids';
+        const deadline = dateMatch ? dateMatch[0] : '';
+        const titleKey = title.toLowerCase().substring(0, 60);
+        if (title && title.length > 5 && !seenTitles.has(titleKey)) {
+          seenTitles.add(titleKey);
+          allOpps.push({ id: `watertown-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, source: 'Watertown MA', title, agency: 'Town of Watertown', deadline, link, description: block.replace(/<[^>]+>/g,' ').trim().substring(0,200), type: 'Bid', status: 'New', notes: '', searchedAt: new Date().toISOString() });
         }
-      } catch (e) {
-        console.warn(`COMMBUYS search failed for "${kw}":`, e.message);
       }
-    }
+    } catch(e) { console.warn('Watertown fetch failed:', e.message); }
+    return allOpps.map(o => ({ ...o, scoring: scoreOpportunity(o) }));
+  }
 
+  // ── Portsmouth NH fetch ───────────────────────────────────────────────────
+  async function fetchPortsmouth() {
+    const allOpps = [];
+    const seenTitles = new Set();
+    setLoadingMsg('Portsmouth NH: fetching bids…');
+    try {
+      const html = await fetchViaProxy('https://www.portsmouthnh.gov/bids-and-rfps/');
+      // Parse links that look like bid/rfp entries
+      const linkMatches = [...html.matchAll(/<a[^>]+href="([^"]*(?:bid|rfp|solicitation)[^"]*)"[^>]*>([^<]{5,150})<\/a>/gi)];
+      // Also parse any h2/h3 with nearby links
+      const blocks = html.split(/<(?:h2|h3|article|li)[^>]*>/i);
+      for (const block of blocks) {
+        const titleMatch = block.match(/^([A-Z][^<\n]{10,120})/);
+        const linkMatch = block.match(/href="(https?:\/\/[^"]+|\/[^"]+)"/) ;
+        const dateMatch = block.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
+        const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g,'').trim() : '';
+        if (!title || title.length < 8) continue;
+        const link = linkMatch ? (linkMatch[1].startsWith('http') ? linkMatch[1] : `https://www.portsmouthnh.gov${linkMatch[1]}`) : 'https://www.portsmouthnh.gov/bids-and-rfps/';
+        const deadline = dateMatch ? dateMatch[0] : '';
+        const titleKey = title.toLowerCase().substring(0,60);
+        if (!seenTitles.has(titleKey) && /bid|rfp|design|project|landscape|park|service|contract/i.test(block)) {
+          seenTitles.add(titleKey);
+          allOpps.push({ id: `portsmouth-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, source: 'Portsmouth NH', title, agency: 'City of Portsmouth NH', deadline, link, description: block.replace(/<[^>]+>/g,' ').trim().substring(0,200), type: 'Bid', status: 'New', notes: '', searchedAt: new Date().toISOString() });
+        }
+      }
+      // Also add any direct bid links found
+      for (const [,href,label] of linkMatches) {
+        const titleKey = label.toLowerCase().substring(0,60);
+        if (!seenTitles.has(titleKey)) {
+          seenTitles.add(titleKey);
+          const fullLink = href.startsWith('http') ? href : `https://www.portsmouthnh.gov${href}`;
+          allOpps.push({ id: `portsmouth-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, source: 'Portsmouth NH', title: label.trim(), agency: 'City of Portsmouth NH', deadline: '', link: fullLink, description: '', type: 'Bid', status: 'New', notes: '', searchedAt: new Date().toISOString() });
+        }
+      }
+    } catch(e) { console.warn('Portsmouth fetch failed:', e.message); }
     return allOpps.map(o => ({ ...o, scoring: scoreOpportunity(o) }));
   }
 
@@ -409,15 +423,16 @@ export default function App() {
 
     setLoadingMsg('City of Boston: fetching bid listings…');
 
-    // Get page 0 first to find total pages
+    // Get page — direct fetch works (boston.gov allows CORS), codetabs as fallback
     async function fetchPage(pageNum) {
       const targetUrl = `https://www.boston.gov/bid-listings${pageNum > 0 ? `?page=${pageNum}` : ''}`;
       try {
         const res = await fetch(targetUrl);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.text();
-      } catch(e) {
-        const res = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`);
+      } catch (e) {
+        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
+        const res = await fetch(proxyUrl);
         return await res.text();
       }
     }
@@ -517,13 +532,14 @@ export default function App() {
 
     try {
       setLoadingMsg('Starting search across all sources…');
-      const [samResults, commbuysResults, bostonResults] = await Promise.all([
+      const [samResults, watertownResults, portsmouthResults, bostonResults] = await Promise.all([
         fetchSAM(apiKey),
-        fetchCOMMBUYS(),
+        fetchWatertown(),
+        fetchPortsmouth(),
         fetchBoston(),
       ]);
 
-      const newResults = [...samResults, ...commbuysResults, ...bostonResults];
+      const newResults = [...samResults, ...watertownResults, ...portsmouthResults, ...bostonResults];
 
       // Merge with existing (preserve notes/status, don't duplicate)
       setResults(prev => {
@@ -620,14 +636,14 @@ export default function App() {
           </div>
           <div style={{ color: '#fff', fontSize: 20, fontWeight: 600 }}>RFP Pipeline</div>
           <div style={{ color: BRAND.secondary, fontSize: 11, marginTop: 2 }}>
-            SAM.gov · COMMBUYS · City of Boston · Manual
+            SAM.gov · City of Boston · Watertown MA · Portsmouth NH · Manual
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <a href="https://sam.gov/search/?index=opp&q=landscape+architecture" target="_blank" rel="noreferrer"
              style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>SAM.gov ↗</a>
           <a href="https://www.commbuys.com/bso/external/bidstatus.sdo" target="_blank" rel="noreferrer"
-             style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>COMMBUYS ↗</a>
+             style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>Watertown ↗</a>
           <a href="https://www.boston.gov/bid-listings" target="_blank" rel="noreferrer"
              style={{ color: BRAND.accent, fontSize: 11, textDecoration: 'none', opacity: 0.85 }}>Boston.gov ↗</a>
           <a href="https://www.bostonplans.org/projects/development-projects" target="_blank" rel="noreferrer"
@@ -708,7 +724,8 @@ export default function App() {
                 style={{ padding: '5px 10px', border: `1px solid ${BRAND.secondary}`, borderRadius: 4, fontSize: 12, background: '#fff' }}>
           <option value="All">All Sources</option>
           <option value="SAM.gov">SAM.gov</option>
-          <option value="COMMBUYS">COMMBUYS</option>
+          <option value="Watertown MA">Watertown MA</option>
+          <option value="Portsmouth NH">Portsmouth NH</option>
           <option value="City of Boston">City of Boston</option>
           <option value="Manual">Manual</option>
         </select>
@@ -879,7 +896,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding: '20px 28px', color: BRAND.muted, fontSize: 11, borderTop: `1px solid ${BRAND.accent}30`, textAlign: 'center' }}>
-        LJLA RFP Pipeline v7 · {results.length} total · {filtered.length} showing
+        LJLA RFP Pipeline v9 · {results.length} total · {filtered.length} showing
         · Scoring: Design 35pts · Geography 25pts · Budget 20pts · Type 20pts
         · Geography covers 153 municipalities across 14 subregions (MA, ME, NH, RI, CT, NY, NJ, PA)
       </div>
