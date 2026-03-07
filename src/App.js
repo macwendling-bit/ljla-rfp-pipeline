@@ -243,17 +243,17 @@ function scoreOpportunity(opp) {
 // ─── SAM.GOV SEARCH KEYWORDS — LJLA-specific ──────────────────────────────────
 const SAM_SEARCHES = [
   'landscape architecture',
-  'landscape architect services',
+  'landscape architect',
+  'landscape design',
+  'park design',
+  'streetscape design',
+  'waterfront design',
+  'urban plaza',
+  'open space design',
+  'site design',
   'planting design',
-  'waterfront park design',
-  'urban plaza landscape',
-  'streetscape landscape design',
-  'civic landscape design',
-  'park master plan landscape',
-  'institutional landscape architecture',
-  'multifamily landscape design',
-  'courtyard landscape design',
-  'promenade landscape',
+  'civic landscape',
+  'outdoor amenity',
 ];
 
 // ─── COMMBUYS KEYWORDS ────────────────────────────────────────────────────────
@@ -354,10 +354,9 @@ export default function App() {
       try {
         setLoadingMsg(`COMMBUYS: searching "${kw}"…`);
         const targetUrl = `https://www.commbuys.com/bso/external/bidstatus.sdo?winningBidderFlag=N&currentPage=1&sortBy=6&keyword=${encodeURIComponent(kw)}`;
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
         const res = await fetch(proxyUrl);
-        const data = await res.json();
-        const html = data.contents || '';
+        const html = await res.text();
 
         // Parse table rows
         const rowRegex = /<tr[^>]*class="[^"]*(?:odd|even)[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -412,11 +411,15 @@ export default function App() {
 
     // Get page 0 first to find total pages
     async function fetchPage(pageNum) {
-      const targetUrl = `https://www.boston.gov/bid-listings?page=${pageNum}`;
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-      const res = await fetch(proxyUrl);
-      const data = await res.json();
-      return data.contents || '';
+      const targetUrl = `https://www.boston.gov/bid-listings${pageNum > 0 ? `?page=${pageNum}` : ''}`;
+      try {
+        const res = await fetch(targetUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.text();
+      } catch(e) {
+        const res = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`);
+        return await res.text();
+      }
     }
 
     try {
