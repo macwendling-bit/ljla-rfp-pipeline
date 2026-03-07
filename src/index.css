@@ -1,0 +1,8 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --blue: #3c75bf; --charcoal: #575759; --muted: rgba(87,87,89,0.61); --rule: #e8e8e8; --font: 'Nunito Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+html, body, #root { height: 100%; background: #fff; color: var(--charcoal); font-family: var(--font); font-weight: 300; -webkit-font-smoothing: antialiased; }
+button { font-family: var(--font); cursor: pointer; }
+input, select, textarea { font-family: var(--font); }
+a { color: var(--blue); text-decoration: none; }
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-thumb { background: #ddd; }
