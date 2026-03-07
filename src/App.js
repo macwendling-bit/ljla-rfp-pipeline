@@ -199,58 +199,60 @@ async function fetchCOMMBUYS() {
 }
 
 // ── Boston.gov bids scraper ────────────────────────────────────────
+async function fetchBostonPage(pageNum, seen, results) {
+  const pageUrl = `https://www.boston.gov/bid-listings${pageNum > 0 ? `?page=${pageNum}` : ""}`;
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}`;
+  const res = await fetch(proxyUrl);
+  const data = await res.json();
+  const html = data.contents || "";
+
+  // Split on views-row to get individual listings
+  const rowParts = html.split(/class="[^"]*views-row[^"]*"/);
+  for (let i = 1; i < rowParts.length; i++) {
+    const chunk = rowParts[i].slice(0, 2000);
+    const titleMatch = chunk.match(/href="(\/bid-listings\/[^"]+)"[^>]*title="([^"]+)"/i)
+      || chunk.match(/href="(\/bid-listings\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!titleMatch) continue;
+    const sourceUrl = `https://www.boston.gov${titleMatch[1]}`;
+    const title = titleMatch[2].replace(/<[^>]+>/g,"").trim();
+    if (!title || title.length < 5 || seen.has(title)) continue;
+    seen.add(title);
+    const dueMatch = chunk.match(/Due:[\s\S]*?(\d{2}\/\d{2}\/\d{4})/i);
+    const postedMatch = chunk.match(/Posted:[\s\S]*?(\d{2}\/\d{2}\/\d{4})/i);
+    const opp = {
+      id: `bos_${Date.now()}_${seen.size}`,
+      title, agency: "City of Boston", type: "RFP",
+      location: "Boston, MA", state: "MA",
+      deadline: dueMatch?.[1] || "TBD", budget: "",
+      description: title, sourceUrl,
+      postedDate: postedMatch?.[1] || "",
+      source: "City of Boston",
+      status: "New", notes: [], scoring: null,
+      addedDate: new Date().toISOString().split("T")[0],
+    };
+    opp.scoring = scoreOpportunity(opp);
+    results.push(opp);
+  }
+
+  // Return number of pages total (detect from last page link)
+  const lastPageMatch = html.match(/bid-listings\?page=(\d+)"[^>]*>Last/i)
+    || html.match(/Last[^<]*<\/a>[\s\S]*?page=(\d+)/i)
+    || html.match(/page=(\d+)"[^>]*rel="last"/i);
+  return lastPageMatch ? parseInt(lastPageMatch[1]) : pageNum;
+}
+
 async function fetchBoston() {
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent("https://www.boston.gov/bid-listings")}`;
   const results = [];
+  const seen = new Set();
   try {
-    const res = await fetch(proxyUrl);
-    const data = await res.json();
-    const html = data.contents || "";
-
-    // Boston.gov uses .views-row with .n-li-t a for title/link
-    // and .dl-i list items for Posted/Due/Contact metadata
-    const rowRe = /<div[^>]*class="[^"]*views-row[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>\s*<\/div>/gi;
-    // Simpler: split on views-row divs
-    const rowParts = html.split(/class="[^"]*views-row[^"]*"/);
-    const seen = new Set();
-
-    for (let i = 1; i < rowParts.length; i++) {
-      const chunk = rowParts[i].slice(0, 2000); // each row chunk
-
-      // Title from .n-li-t a
-      const titleMatch = chunk.match(/class="n-li-t"[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i)
-        || chunk.match(/href="(\/bid-listings\/[^"]+)"[^>]*title="([^"]+)"/i)
-        || chunk.match(/href="(\/bid-listings\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-
-      if (!titleMatch) continue;
-      const sourceUrl = titleMatch[1].startsWith('http') ? titleMatch[1] : `https://www.boston.gov${titleMatch[1]}`;
-      const title = titleMatch[2].replace(/<[^>]+>/g,"").trim();
-      if (!title || title.length < 5 || seen.has(title)) continue;
-      seen.add(title);
-
-      // Due date from "Due:" dl-i
-      const dueMatch = chunk.match(/Due:[\s\S]*?(\d{2}\/\d{2}\/\d{4})/i);
-      const postedMatch = chunk.match(/Posted:[\s\S]*?(\d{2}\/\d{2}\/\d{4})/i);
-
-      const opp = {
-        id: `bos_${Date.now()}_${seen.size}`,
-        title,
-        agency: "City of Boston",
-        type: "RFP",
-        location: "Boston, MA",
-        state: "MA",
-        deadline: dueMatch?.[1] || "TBD",
-        budget: "",
-        description: title,
-        sourceUrl,
-        postedDate: postedMatch?.[1] || "",
-        source: "City of Boston",
-        status: "New", notes: [], scoring: null,
-        addedDate: new Date().toISOString().split("T")[0],
-      };
-      opp.scoring = scoreOpportunity(opp);
-      results.push(opp); // include all Boston listings, let user filter
+    // Fetch page 0 first — it tells us the last page number
+    const lastPage = await fetchBostonPage(0, seen, results);
+    // Fetch remaining pages in parallel
+    const pagePromises = [];
+    for (let p = 1; p <= lastPage; p++) {
+      pagePromises.push(fetchBostonPage(p, seen, results));
     }
+    await Promise.all(pagePromises);
   } catch(e) { console.warn("Boston fetch error:", e); }
   return results;
 }
