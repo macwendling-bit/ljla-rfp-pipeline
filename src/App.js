@@ -207,20 +207,30 @@ async function fetchBoston() {
     const data = await res.json();
     const html = data.contents || "";
 
-    // Extract bid listing items from Boston.gov HTML
-    const itemRe = /<article[^>]*>([\s\S]*?)<\/article>/gi;
-    let match;
+    // Boston.gov uses .views-row with .n-li-t a for title/link
+    // and .dl-i list items for Posted/Due/Contact metadata
+    const rowRe = /<div[^>]*class="[^"]*views-row[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>\s*<\/div>/gi;
+    // Simpler: split on views-row divs
+    const rowParts = html.split(/class="[^"]*views-row[^"]*"/);
     const seen = new Set();
-    while ((match = itemRe.exec(html)) !== null) {
-      const inner = match[1];
-      const titleMatch = inner.match(/<h\d[^>]*>([\s\S]*?)<\/h\d>/i);
-      const linkMatch = inner.match(/href="(\/bid-listings\/[^"]+)"/i);
-      const dateMatch = inner.match(/(\d{1,2}\/\d{1,2}\/\d{4}|\w+ \d{1,2},? \d{4})/);
-      const numMatch = inner.match(/(?:Project|Bid|No\.?|#)\s*([\w-]+)/i);
 
-      const title = titleMatch?.[1].replace(/<[^>]+>/g,"").trim();
-      if (!title || seen.has(title)) continue;
+    for (let i = 1; i < rowParts.length; i++) {
+      const chunk = rowParts[i].slice(0, 2000); // each row chunk
+
+      // Title from .n-li-t a
+      const titleMatch = chunk.match(/class="n-li-t"[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i)
+        || chunk.match(/href="(\/bid-listings\/[^"]+)"[^>]*title="([^"]+)"/i)
+        || chunk.match(/href="(\/bid-listings\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+
+      if (!titleMatch) continue;
+      const sourceUrl = titleMatch[1].startsWith('http') ? titleMatch[1] : `https://www.boston.gov${titleMatch[1]}`;
+      const title = titleMatch[2].replace(/<[^>]+>/g,"").trim();
+      if (!title || title.length < 5 || seen.has(title)) continue;
       seen.add(title);
+
+      // Due date from "Due:" dl-i
+      const dueMatch = chunk.match(/Due:[\s\S]*?(\d{2}\/\d{2}\/\d{4})/i);
+      const postedMatch = chunk.match(/Posted:[\s\S]*?(\d{2}\/\d{2}\/\d{4})/i);
 
       const opp = {
         id: `bos_${Date.now()}_${seen.size}`,
@@ -229,17 +239,17 @@ async function fetchBoston() {
         type: "RFP",
         location: "Boston, MA",
         state: "MA",
-        deadline: dateMatch?.[0] || "TBD",
+        deadline: dueMatch?.[1] || "TBD",
         budget: "",
         description: title,
-        sourceUrl: linkMatch ? `https://www.boston.gov${linkMatch[1]}` : "https://www.boston.gov/bid-listings",
-        postedDate: "",
+        sourceUrl,
+        postedDate: postedMatch?.[1] || "",
         source: "City of Boston",
         status: "New", notes: [], scoring: null,
         addedDate: new Date().toISOString().split("T")[0],
       };
       opp.scoring = scoreOpportunity(opp);
-      if (opp.scoring.score > 10) results.push(opp);
+      results.push(opp); // include all Boston listings, let user filter
     }
   } catch(e) { console.warn("Boston fetch error:", e); }
   return results;
