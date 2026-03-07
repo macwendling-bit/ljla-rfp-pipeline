@@ -1,57 +1,148 @@
 import { useState, useEffect, useCallback } from "react";
 import './index.css';
 
-const API_KEY = process.env.REACT_APP_ANTHROPIC_KEY || "";
+// ── Config ────────────────────────────────────────────────────────
+const BLUE = "#3c75bf", CHAR = "#575759", MUTED = "rgba(87,87,89,0.61)", RULE = "#e8e8e8";
 
-const FIRM_PROFILE = `LeBlanc Jones Landscape Architects is a Boston-based landscape architecture firm with offices in Boston (535 Albany St) and Falmouth, Cape Cod, MA.
-STRENGTHS: High-design landscape architecture, placemaking, parks, streetscapes, waterfronts, campus grounds. Award-winning, design-forward.
-IDEAL PROJECTS: Significant design component, $500K+ construction budgets, municipalities with design-forward leadership, universities, cultural institutions. MA/Boston priority, then New England, then CT/NY/NJ/PA. NOT a fit: pure engineering, small budgets, maintenance contracts.`;
+const DESIGN_KEYWORDS = [
+  "landscape architecture","placemaking","urban design","public realm","streetscape",
+  "waterfront","park design","plaza","promenade","green infrastructure","open space",
+  "campus","cultural","civic","community park","trail","greenway","riverwalk",
+  "town center","master plan","design services"
+];
+const ENGINEERING_KEYWORDS = [
+  "civil engineering","stormwater","utilities","pavement","road construction",
+  "maintenance","mowing","snow removal","janitorial","inspection only"
+];
+const MA_CITIES = [
+  "boston","cambridge","somerville","brookline","newton","quincy","worcester",
+  "springfield","lowell","lynn","fall river","new bedford","brockton","lawrence",
+  "medford","malden","waltham","haverhill","gloucester","northampton","amherst",
+  "pittsfield","chicopee","holyoke","fitchburg","leominster","revere","taunton",
+  "barnstable","falmouth","plymouth","sandwich","yarmouth","dennis","brewster",
+  "chatham","eastham","wellfleet","truro","provincetown","cape cod","martha's vineyard",
+  "nantucket","lexington","concord","lincoln","sudbury","acton","arlington",
+  "belmont","watertown","needham","wellesley","dedham","milton","canton"
+];
+const NE_STATES = ["massachusetts","ma","connecticut","ct","rhode island","ri",
+  "new hampshire","nh","vermont","vt","maine","me"];
+const NY_STATES = ["new york","ny","new jersey","nj","pennsylvania","pa"];
 
-const SEARCH_PROMPT = `You are a procurement researcher for a landscape architecture firm. Search for REAL, CURRENT public RFP/RFQ/RFI solicitations for landscape architecture, parks, streetscapes, waterfront, campus grounds, or public realm design posted in the last 60 days. Regions: Massachusetts, New England, Connecticut, New York, New Jersey, Pennsylvania.
-Return ONLY a JSON array, no preamble, no markdown. Each item: {"title","agency","type","location","state","deadline","budget","description","sourceUrl","postedDate"}`;
+function scoreOpportunity(opp) {
+  const text = `${opp.title} ${opp.description} ${opp.agency} ${opp.location}`.toLowerCase();
+  let score = 0;
 
-const SCORE_PROMPT = `You score RFP opportunities for LeBlanc Jones Landscape Architects.
-Firm: ${FIRM_PROFILE}
-Scoring weights: design sophistication 35%, geographic fit (MA=100, NE=80, CT/NY/NJ/PA=60) 25%, budget adequacy 20%, project type alignment 20%.
-Return ONLY a JSON object, no preamble: {"score":0-100,"tier":"Strong Match"|"Good Match"|"Possible Match"|"Poor Match","rationale":"2-3 sentences","pros":["..."],"cons":["..."],"recommendation":"Pursue"|"Monitor"|"Pass"}`;
+  // Design sophistication (35%)
+  const designHits = DESIGN_KEYWORDS.filter(k => text.includes(k)).length;
+  const engHits = ENGINEERING_KEYWORDS.filter(k => text.includes(k)).length;
+  const designScore = Math.min(35, designHits * 8 - engHits * 10);
+  score += Math.max(0, designScore);
 
-async function callClaude(system, user, useSearch = false) {
-  const body = { model: "claude-sonnet-4-20250514", max_tokens: 4000, system, messages: [{ role: "user", content: user }] };
-  if (useSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
-}
+  // Geography (25%)
+  const isMa = MA_CITIES.some(c => text.includes(c)) || text.includes(" ma ") || text.includes("massachusetts");
+  const isNE = NE_STATES.some(s => text.includes(s));
+  const isNY = NY_STATES.some(s => text.includes(s));
+  if (isMa) score += 25;
+  else if (isNE) score += 20;
+  else if (isNY) score += 15;
+  else score += 5;
 
-function parseJSON(raw) {
-  const clean = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-  function outer(str, o, c) {
-    let s = str.indexOf(o); if (s === -1) return null;
-    let d = 0;
-    for (let i = s; i < str.length; i++) { if (str[i]===o) d++; else if (str[i]===c) { d--; if (!d) return str.slice(s, i+1); } }
-    return null;
+  // Budget (20%) — look for dollar amounts
+  const budgetMatch = text.match(/\$[\d,]+[km]?/g);
+  if (budgetMatch) {
+    const amounts = budgetMatch.map(b => {
+      const n = parseFloat(b.replace(/[$,]/g, ""));
+      if (b.toLowerCase().includes("m")) return n * 1000000;
+      if (b.toLowerCase().includes("k")) return n * 1000;
+      return n;
+    });
+    const max = Math.max(...amounts);
+    if (max >= 1000000) score += 20;
+    else if (max >= 500000) score += 16;
+    else if (max >= 200000) score += 10;
+    else if (max >= 50000) score += 5;
+  } else {
+    score += 10; // unknown budget — give partial credit
   }
-  const arr = outer(clean,"[","]");
-  if (arr) { try { return JSON.parse(arr); } catch {} }
-  const obj = outer(clean,"{","}");
-  if (obj) { try { const p=JSON.parse(obj); const av=Object.values(p).find(v=>Array.isArray(v)); return av||p; } catch {} }
-  throw new Error("No valid JSON");
+
+  // Project type (20%)
+  if (text.includes("rfp") || text.includes("request for proposal")) score += 20;
+  else if (text.includes("rfq") || text.includes("request for qualifications")) score += 15;
+  else if (text.includes("rfi")) score += 8;
+
+  score = Math.min(100, Math.max(0, score));
+
+  let tier, recommendation;
+  if (score >= 75) { tier = "Strong Match"; recommendation = "Pursue"; }
+  else if (score >= 55) { tier = "Good Match"; recommendation = "Pursue"; }
+  else if (score >= 35) { tier = "Possible Match"; recommendation = "Monitor"; }
+  else { tier = "Poor Match"; recommendation = "Pass"; }
+
+  return { score, tier, recommendation };
 }
 
-const SK = "ljla_v4";
-const load = () => { try { return JSON.parse(localStorage.getItem(SK)||"[]"); } catch { return []; } };
+// ── SAM.gov API ────────────────────────────────────────────────────
+async function fetchSAMgov(apiKey) {
+  const today = new Date();
+  const past60 = new Date(today - 60 * 86400000);
+  const fmt = d => `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`;
+
+  const keywords = [
+    "landscape architecture",
+    "park design",
+    "streetscape",
+    "public realm design",
+    "urban design",
+    "waterfront design"
+  ];
+
+  const results = [];
+  const seen = new Set();
+
+  for (const kw of keywords) {
+    const url = `https://api.sam.gov/opportunities/v2/search?limit=10&keywords=${encodeURIComponent(kw)}&postedFrom=${fmt(past60)}&postedTo=${fmt(today)}&ptype=o&api_key=${apiKey}`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const item of (data.opportunitiesData || [])) {
+        if (seen.has(item.noticeId)) continue;
+        seen.add(item.noticeId);
+        results.push({
+          id: `sam_${item.noticeId}`,
+          title: item.title || "Untitled",
+          agency: item.organizationName || item.fullParentPathName || "Federal Agency",
+          type: (item.type || "RFP").toUpperCase(),
+          location: `${item.placeOfPerformance?.city?.name || ""}, ${item.placeOfPerformance?.state?.code || ""}`.replace(/^, |, $/g, "") || "See solicitation",
+          state: item.placeOfPerformance?.state?.code || "",
+          deadline: item.responseDeadLine ? item.responseDeadLine.split("T")[0] : "TBD",
+          budget: "",
+          description: item.description || item.title || "",
+          sourceUrl: `https://sam.gov/opp/${item.noticeId}/view`,
+          postedDate: item.postedDate ? item.postedDate.split("T")[0] : "",
+          status: "New",
+          notes: [],
+          scoring: null,
+          addedDate: new Date().toISOString().split("T")[0],
+        });
+      }
+    } catch (e) { console.warn("SAM fetch error:", e); }
+  }
+  return results;
+}
+
+// ── Storage ────────────────────────────────────────────────────────
+const SK = "ljla_v5";
+const load = () => { try { return JSON.parse(localStorage.getItem(SK) || "[]"); } catch { return []; } };
 const save = (d) => { try { localStorage.setItem(SK, JSON.stringify(d)); } catch {} };
+const loadKey = () => localStorage.getItem("ljla_sam_key") || "";
+const saveKey = (k) => localStorage.setItem("ljla_sam_key", k);
 
 const TIERS = ["Strong Match","Good Match","Possible Match","Poor Match"];
 const STATUSES = ["New","Reviewing","Pursuing","Submitted","Won","Passed"];
 const STATES = ["MA","NH","VT","ME","RI","CT","NY","NJ","PA"];
-const BLUE = "#3c75bf", CHAR = "#575759", MUTED = "rgba(87,87,89,0.61)", RULE = "#e8e8e8";
 
+// ── Mini components ────────────────────────────────────────────────
 function Ring({ score, size=42 }) {
   const r = size/2-4, c = 2*Math.PI*r, f = (score/100)*c;
   return (
@@ -64,7 +155,6 @@ function Ring({ score, size=42 }) {
     </svg>
   );
 }
-
 function Dots({ tier }) {
   const n = {"Strong Match":4,"Good Match":3,"Possible Match":2,"Poor Match":1}[tier]||0;
   return (
@@ -74,30 +164,30 @@ function Dots({ tier }) {
     </span>
   );
 }
-
 function Pill({ rec }) {
   const clr = {Pursue:BLUE,Monitor:"#8a7f3c",Pass:"#aaa"}[rec]||"#aaa";
   return <span style={{fontSize:10,fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",color:clr,border:`1px solid ${clr}`,padding:"2px 10px"}}>{rec}</span>;
 }
-
 function statusClr(s) {
   if (["Pursuing","Submitted","Won"].includes(s)) return BLUE;
   if (s==="Passed") return "#bbb";
   return CHAR;
 }
 
+// ── Main App ───────────────────────────────────────────────────────
 export default function App() {
   const [opps, setOpps] = useState(load);
   const [view, setView] = useState("board");
   const [sel, setSel] = useState(null);
   const [searching, setSearching] = useState(false);
-  const [scoringId, setScoringId] = useState(null);
   const [log, setLog] = useState("");
   const [fTier, setFTier] = useState("All");
   const [fStatus, setFStatus] = useState("All");
   const [fState, setFState] = useState("All");
   const [sort, setSort] = useState("score");
   const [note, setNote] = useState("");
+  const [apiKey, setApiKey] = useState(loadKey);
+  const [showKeyInput, setShowKeyInput] = useState(false);
   const [form, setForm] = useState({title:"",agency:"",type:"RFP",location:"",state:"MA",deadline:"",budget:"",description:"",sourceUrl:"",postedDate:""});
 
   const persist = useCallback(items => { setOpps(items); save(items); }, []);
@@ -107,31 +197,27 @@ export default function App() {
   }, [opps]); // eslint-disable-line
 
   async function search() {
-    setSearching(true); setLog("Searching procurement portals…");
+    if (!apiKey) { setShowKeyInput(true); return; }
+    setSearching(true);
+    setLog("Searching SAM.gov…");
     try {
-      const raw = await callClaude(SEARCH_PROMPT, "Search for current landscape architecture RFPs in MA, New England, CT, NY, NJ, PA. Return 6-10 as JSON array.", true);
-      const parsed = parseJSON(raw);
-      const found = Array.isArray(parsed) ? parsed : Object.values(parsed).find(v=>Array.isArray(v))||[];
-      if (!found.length) throw new Error("No results — try again");
-      const newOps = found.map((f,i)=>({...f,id:`s_${Date.now()}_${i}`,status:"New",notes:[],scoring:null,addedDate:new Date().toISOString().split("T")[0]}));
+      const found = await fetchSAMgov(apiKey);
+      if (!found.length) throw new Error("No results — check your API key or try again");
+      const scored = found.map(f => ({ ...f, scoring: scoreOpportunity(f) }));
       const merged = [...opps];
-      for (const op of newOps) { if(!merged.find(e=>e.title?.toLowerCase()===op.title?.toLowerCase()&&e.agency===op.agency)) merged.push(op); }
-      persist(merged); setLog(`${newOps.length} opportunities found`);
-    } catch(e) { setLog("Error: "+e.message); }
+      for (const op of scored) {
+        if (!merged.find(e => e.title?.toLowerCase()===op.title?.toLowerCase() && e.agency===op.agency)) merged.push(op);
+      }
+      persist(merged);
+      setLog(`${scored.length} opportunities found & scored`);
+    } catch(e) { setLog("Error: " + e.message); }
     setSearching(false);
   }
 
-  async function score(id) {
-    setScoringId(id);
-    const op = opps.find(o=>o.id===id);
-    try {
-      const raw = await callClaude(SCORE_PROMPT, `Score: Title:${op.title} Agency:${op.agency} Location:${op.location} Type:${op.type} Budget:${op.budget} Description:${op.description}`);
-      persist(opps.map(o=>o.id===id?{...o,scoring:parseJSON(raw)}:o));
-    } catch(e) { console.error(e); }
-    setScoringId(null);
-  }
-
-  const scoreAll = async () => { for (const op of opps.filter(o=>!o.scoring)) await score(op.id); };
+  const scoreOne = (id) => {
+    persist(opps.map(o => o.id===id ? {...o, scoring: scoreOpportunity(o)} : o));
+  };
+  const scoreAll = () => persist(opps.map(o => ({...o, scoring: scoreOpportunity(o)})));
   const updateStatus = (id,s) => persist(opps.map(o=>o.id===id?{...o,status:s}:o));
   const addNote = (id) => {
     if (!note.trim()) return;
@@ -141,7 +227,8 @@ export default function App() {
   const del = (id) => { persist(opps.filter(o=>o.id!==id)); setView("board"); };
   const addManual = (e) => {
     e.preventDefault();
-    persist([...opps,{...form,id:`m_${Date.now()}`,status:"New",notes:[],scoring:null,addedDate:new Date().toISOString().split("T")[0]}]);
+    const scored = { ...form, id:`m_${Date.now()}`, status:"New", notes:[], scoring:scoreOpportunity(form), addedDate:new Date().toISOString().split("T")[0] };
+    persist([...opps, scored]);
     setForm({title:"",agency:"",type:"RFP",location:"",state:"MA",deadline:"",budget:"",description:"",sourceUrl:"",postedDate:""});
     setView("board");
   };
@@ -163,25 +250,11 @@ export default function App() {
     unscored: opps.filter(o=>!o.scoring).length,
   };
 
-  const P = { // Primary btn
-    background:BLUE,color:"#fff",border:`1px solid ${BLUE}`,padding:"8px 20px",
-    fontSize:13,fontWeight:400,letterSpacing:"0.02em",cursor:"pointer",fontFamily:"inherit",
-  };
-  const O = { // Outline btn
-    background:"transparent",color:CHAR,border:`1px solid ${RULE}`,padding:"7px 18px",
-    fontSize:12,fontWeight:400,cursor:"pointer",fontFamily:"inherit",
-  };
-  const I = { // Input
-    width:"100%",padding:"8px 0",border:"none",borderBottom:`1px solid ${RULE}`,
-    fontSize:14,fontWeight:300,background:"transparent",outline:"none",color:CHAR,fontFamily:"inherit",
-  };
-  const L = { // Label
-    display:"block",fontSize:10,fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,marginBottom:6,
-  };
-  const SE = { // Select
-    border:`1px solid ${RULE}`,background:"#fff",color:CHAR,fontSize:12,padding:"6px 10px",
-    cursor:"pointer",outline:"none",fontFamily:"inherit",fontWeight:400,
-  };
+  const P = { background:BLUE,color:"#fff",border:`1px solid ${BLUE}`,padding:"8px 20px",fontSize:13,fontWeight:400,letterSpacing:"0.02em",cursor:"pointer",fontFamily:"inherit" };
+  const O = { background:"transparent",color:CHAR,border:`1px solid ${RULE}`,padding:"7px 18px",fontSize:12,fontWeight:400,cursor:"pointer",fontFamily:"inherit" };
+  const I = { width:"100%",padding:"8px 0",border:"none",borderBottom:`1px solid ${RULE}`,fontSize:14,fontWeight:300,background:"transparent",outline:"none",color:CHAR,fontFamily:"inherit" };
+  const L = { display:"block",fontSize:10,fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,marginBottom:6 };
+  const SE = { border:`1px solid ${RULE}`,background:"#fff",color:CHAR,fontSize:12,padding:"6px 10px",cursor:"pointer",outline:"none",fontFamily:"inherit",fontWeight:400 };
 
   const op = sel ? (opps.find(o=>o.id===sel.id)||sel) : null;
 
@@ -195,11 +268,24 @@ export default function App() {
           <span style={{fontSize:11,color:MUTED,fontWeight:300,letterSpacing:"0.06em"}}>Public Work Pipeline</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          {stats.unscored>0 && <button style={O} onClick={scoreAll} disabled={!!scoringId}>{scoringId?"Scoring…":`Score All (${stats.unscored})`}</button>}
+          {stats.unscored>0 && <button style={O} onClick={scoreAll}>Score All ({stats.unscored})</button>}
           <button style={O} onClick={()=>setView("add")}>Add Opportunity</button>
-          <button style={P} onClick={search} disabled={searching}>{searching?"Searching…":"Search for RFPs"}</button>
+          <button style={{...O,fontSize:11,padding:"6px 12px"}} onClick={()=>setShowKeyInput(!showKeyInput)} title="SAM.gov API Key">⚙ API Key</button>
+          <button style={P} onClick={search} disabled={searching}>{searching?"Searching…":"Search SAM.gov"}</button>
         </div>
       </header>
+
+      {/* API KEY BANNER */}
+      {showKeyInput && (
+        <div style={{background:"#f0f4fb",borderBottom:`1px solid ${RULE}`,padding:"12px 48px",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+          <span style={{fontSize:12,color:CHAR,fontWeight:400}}>SAM.gov API Key</span>
+          <input style={{...I,width:340,fontSize:12}} placeholder="Paste your free SAM.gov API key here…"
+            value={apiKey} onChange={e=>setApiKey(e.target.value)}/>
+          <button style={P} onClick={()=>{ saveKey(apiKey); setShowKeyInput(false); setLog("API key saved"); }}>Save</button>
+          <button style={O} onClick={()=>setShowKeyInput(false)}>Cancel</button>
+          <a href="https://sam.gov/profile/details" target="_blank" rel="noreferrer" style={{fontSize:11,color:BLUE}}>Get free key at sam.gov →</a>
+        </div>
+      )}
 
       {/* STAT BAR */}
       <div style={{background:"#f9f9f8",borderBottom:`1px solid ${RULE}`,padding:"0 48px",height:44,display:"flex",alignItems:"center",gap:40,flexShrink:0}}>
@@ -242,8 +328,20 @@ export default function App() {
         <div style={{flex:1,overflowY:"auto",padding:"32px 48px"}}>
           {filtered.length===0 ? (
             <div style={{textAlign:"center",padding:"100px 0"}}>
-              <div style={{fontSize:13,color:MUTED,marginBottom:20}}>No opportunities tracked yet.</div>
-              <button style={P} onClick={search}>Search for RFPs</button>
+              <div style={{fontSize:13,color:MUTED,marginBottom:20}}>
+                {opps.length===0 ? "No opportunities yet." : "No results match your filters."}
+              </div>
+              {opps.length===0 && (
+                <div>
+                  <p style={{fontSize:12,color:MUTED,marginBottom:16}}>
+                    To search SAM.gov, you need a free API key.<br/>
+                    <a href="https://sam.gov/profile/details" target="_blank" rel="noreferrer" style={{color:BLUE}}>
+                      Get yours free at sam.gov →
+                    </a> (no credit card)
+                  </p>
+                  <button style={P} onClick={()=>setShowKeyInput(true)}>Enter API Key & Search</button>
+                </div>
+              )}
             </div>
           ) : (
             <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -262,25 +360,25 @@ export default function App() {
                     onMouseEnter={e=>e.currentTarget.style.background="#f7f9fc"}
                     onMouseLeave={e=>e.currentTarget.style.background="#fff"}
                   >
-                    <td style={{padding:"14px 14px",width:60}}>
+                    <td style={{padding:"14px",width:60}}>
                       {o.scoring
                         ? <Ring score={o.scoring.score} size={42}/>
-                        : <button style={{...O,padding:"4px 10px",fontSize:10}} onClick={e=>{e.stopPropagation();score(o.id);}} disabled={scoringId===o.id}>{scoringId===o.id?"…":"Score"}</button>
+                        : <button style={{...O,padding:"4px 10px",fontSize:10}} onClick={e=>{e.stopPropagation();scoreOne(o.id);}}>Score</button>
                       }
                     </td>
-                    <td style={{padding:"14px 14px",maxWidth:300}}>
+                    <td style={{padding:"14px",maxWidth:300}}>
                       <div style={{fontSize:14,fontWeight:400,color:"#000",lineHeight:1.35,marginBottom:3}}>{o.title}</div>
                       {o.scoring && <Dots tier={o.scoring.tier}/>}
                     </td>
-                    <td style={{padding:"14px 14px",fontSize:13,color:CHAR,fontWeight:300,maxWidth:200}}>{o.agency}</td>
-                    <td style={{padding:"14px 14px",fontSize:12,color:MUTED,whiteSpace:"nowrap"}}>{o.location}</td>
-                    <td style={{padding:"14px 14px",fontSize:12,color:MUTED,whiteSpace:"nowrap"}}>
+                    <td style={{padding:"14px",fontSize:13,color:CHAR,fontWeight:300,maxWidth:200}}>{o.agency}</td>
+                    <td style={{padding:"14px",fontSize:12,color:MUTED,whiteSpace:"nowrap"}}>{o.location}</td>
+                    <td style={{padding:"14px",fontSize:12,color:MUTED,whiteSpace:"nowrap"}}>
                       {o.deadline&&o.deadline!=="TBD"?o.deadline:<span style={{color:"#ccc"}}>TBD</span>}
                     </td>
-                    <td style={{padding:"14px 14px"}}>
+                    <td style={{padding:"14px"}}>
                       <span style={{fontSize:11,fontWeight:400,color:statusClr(o.status)}}>{o.status}</span>
                     </td>
-                    <td style={{padding:"14px 14px",textAlign:"right",color:"#ccc",fontSize:16}}>›</td>
+                    <td style={{padding:"14px",textAlign:"right",color:"#ccc",fontSize:16}}>›</td>
                   </tr>
                 ))}
               </tbody>
@@ -312,14 +410,14 @@ export default function App() {
           <div style={{borderTop:`1px solid ${RULE}`}}/>
           <div style={{padding:"28px 0"}}>
             <span style={L}>Description</span>
-            <p style={{fontSize:14,lineHeight:1.75,fontWeight:300,color:CHAR}}>{op.description}</p>
-            {op.sourceUrl && <a href={op.sourceUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:14,fontSize:12,color:BLUE}}>View Original Solicitation →</a>}
+            <p style={{fontSize:14,lineHeight:1.75,fontWeight:300,color:CHAR}}>{op.description||"No description available."}</p>
+            {op.sourceUrl && <a href={op.sourceUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:14,fontSize:12,color:BLUE}}>View on SAM.gov →</a>}
           </div>
           <div style={{borderTop:`1px solid ${RULE}`}}/>
           <div style={{padding:"28px 0"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
               <span style={L}>Fit Analysis</span>
-              {!op.scoring && <button style={P} onClick={()=>score(op.id)} disabled={scoringId===op.id}>{scoringId===op.id?"Analyzing…":"Run Analysis"}</button>}
+              <button style={P} onClick={()=>scoreOne(op.id)}>Re-Score</button>
             </div>
             {op.scoring ? (
               <div>
@@ -327,11 +425,9 @@ export default function App() {
                   <Ring score={op.scoring.score} size={64}/>
                   <div><Dots tier={op.scoring.tier}/><div style={{marginTop:10}}><Pill rec={op.scoring.recommendation}/></div></div>
                 </div>
-                <p style={{fontSize:14,lineHeight:1.75,fontWeight:300,color:CHAR,marginBottom:24}}>{op.scoring.rationale}</p>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:32}}>
-                  <div><span style={L}>Strengths</span>{op.scoring.pros?.map((p,i)=><div key={i} style={{fontSize:13,color:CHAR,fontWeight:300,marginBottom:7,display:"flex",gap:10}}><span style={{color:BLUE,flexShrink:0}}>+</span><span>{p}</span></div>)}</div>
-                  <div><span style={L}>Concerns</span>{op.scoring.cons?.map((c,i)=><div key={i} style={{fontSize:13,color:MUTED,fontWeight:300,marginBottom:7,display:"flex",gap:10}}><span style={{flexShrink:0}}>–</span><span>{c}</span></div>)}</div>
-                </div>
+                <p style={{fontSize:13,color:MUTED,lineHeight:1.6}}>
+                  Score based on design keyword match, geography, budget indicators, and solicitation type.
+                </p>
               </div>
             ) : <p style={{fontSize:13,color:"#ccc"}}>No analysis yet.</p>}
           </div>
@@ -403,4 +499,3 @@ export default function App() {
     </div>
   );
 }
-
