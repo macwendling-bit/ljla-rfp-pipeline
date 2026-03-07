@@ -12,7 +12,6 @@ const BRAND = {
   border: '#E8E8E8',     // Light border
   bg: '#F7F7F7',         // Off-white page bg
 };
-};
 
 // ─── BD MAP: TARGET GEOGRAPHY BY SUBREGION ────────────────────────────────────
 // Derived from leblanc_jones_bd_map_v1.xlsx — all 153 municipalities across 8 states
@@ -122,52 +121,60 @@ function getGeoScore(text) {
 
 // DESIGN QUALITY KEYWORDS — highest value (35 pts max)
 const DESIGN_KEYWORDS = {
-  // Core LA design vocabulary — what LJLA is known for
+  // Core LA design vocabulary — what LJLA is known for (20-35 pts)
   high: [
     'landscape architecture','landscape architect','planting design','plant palette',
     'horticultural','botanical','ecological planting','native planting','planting strategy',
     'landscape design','garden design','designed landscape','landscape masterplan',
     'spatial composition','landscape framework','site design','site planning landscape',
+    'planning and design services','design services for','landscape and urban design',
   ],
-  // Civic/public realm project types LJLA wants
+  // Civic/public realm project types LJLA wants (6 pts each)
   civic: [
-    'waterfront park','waterfront promenade','promenade','waterfront landscape',
-    'urban plaza','civic plaza','public square','plaza design',
-    'park design','park master plan','parkland','greenway','green space design',
-    'streetscape design','streetscape improvement','complete streets landscape',
+    'waterfront park','waterfront promenade','promenade','waterfront landscape','waterfront design',
+    'urban plaza','civic plaza','public square','plaza design','plaza renovation','plaza improvement',
+    'park design','park master plan','parkland','park renovation','park improvement','park restoration',
+    'park and recreation','parks and recreation','parks department','recreation department',
+    'greenway','green space design','open space design','open space plan',
+    'streetscape design','streetscape improvement','complete streets',
     'institutional landscape','campus landscape','university landscape','museum landscape',
     'cultural landscape','historic landscape','restorative landscape',
+    'waterfront','harbor design','harborwalk','riverwalk','esplanade',
+    'public realm','public space','outdoor public space',
   ],
-  // Multifamily/developer — strong fit for LJLA
+  // Multifamily/developer — strong fit for LJLA (5 pts each)
   multifamily: [
     'multifamily landscape','residential landscape','courtyard garden','amenity landscape',
     'rooftop garden','rooftop amenity','pool terrace','outdoor amenity','shared garden',
     'mixed use landscape','transit-oriented landscape','developer landscape',
   ],
-  // Supporting keywords — relevant but less specific (still design-adjacent)
+  // Supporting — broad design/planning signals (4 pts each, no primary needed)
   supporting: [
-    'open space','outdoor space','landscape improvement','landscape restoration',
-    'pedestrian design','pedestrian realm','outdoor environment',
-    'trail design','greenway design','community park','neighborhood park',
+    'park','plaza','garden','playground','recreation area','open space','outdoor space',
+    'waterfront','harbor','wharf','seaport','esplanade','promenade',
+    'landscape improvement','landscape restoration','landscape renovation',
+    'pedestrian design','pedestrian realm','pedestrian improvement','pedestrian corridor',
+    'trail','greenway','bikeway','bike path',
+    'community park','neighborhood park','tot lot','spray park','splash pad',
     'coastal landscape','resilient landscape','sustainable landscape',
-    'green infrastructure','urban forestry','tree planting','bioretention',
-    'rain garden','permeable','stormwater design',
+    'green infrastructure','urban forestry','tree planting','urban tree',
+    'bioretention','rain garden','permeable','stormwater design',
+    'planning and design','design services','master plan','masterplan',
+    'rfp','rfq','request for proposal','request for qualifications',
   ],
 };
 
-// CITY PORTAL INTAKE FILTER — must match at least one to be ingested at all
-// These are design/planning signals. Without one, the bid is construction/maintenance noise.
+// CITY PORTAL INTAKE FILTER — must match at least one to pass
 const CITY_PORTAL_REQUIRED = [
   'landscape architect','landscape architecture','landscape design','planting design',
   'site design','park design','plaza design','streetscape design','waterfront design',
   'open space design','greenway design','trail design','outdoor amenity',
-  'park','plaza','waterfront','promenade','greenway','streetscape',
-  'playground design','playground renovation','playfield','recreation design',
-  'garden','grounds design','courtyard','outdoor space improvement',
+  'park','plaza','waterfront','promenade','greenway','streetscape','harbor','wharf',
+  'playground','recreation','garden','grounds design','courtyard',
   'pedestrian improvement','bike path','bikeway','multiuse path',
-  'planning and design','design services','rfp','request for proposal','request for qualifications',
+  'planning and design','design services','master plan',
+  'rfp','request for proposal','request for qualifications',
 ];
-};
 
 // NEGATIVE SIGNALS — discard entirely if title matches these
 const NEGATIVE_KEYWORDS = [
@@ -276,10 +283,10 @@ function scoreOpportunity(opp) {
 
   // Tier classification
   let tier, tierColor;
-  if (total >= 75) { tier = 'Strong Match'; tierColor = '#2C4A3E'; }
-  else if (total >= 55) { tier = 'Good Match'; tierColor = '#5C8A6E'; }
-  else if (total >= 35) { tier = 'Possible Match'; tierColor = '#8B9E6E'; }
-  else { tier = 'Poor Match'; tierColor = '#9BA89E'; }
+  if (total >= 75) { tier = 'Strong Match'; tierColor = '#1A5CA8'; }
+  else if (total >= 55) { tier = 'Good Match'; tierColor = '#3C75BF'; }
+  else if (total >= 35) { tier = 'Possible Match'; tierColor = '#7AAAD4'; }
+  else { tier = 'Poor Match'; tierColor = '#B0C8E4'; }
 
   return {
     total,
@@ -1136,7 +1143,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding: '24px 32px', color: BRAND.muted, fontSize: 11, borderTop: `1px solid ${BRAND.border}`, textAlign: 'center' }}>
-        LJLA RFP Pipeline v11 · {results.length} total · {filtered.length} showing
+        LJLA RFP Pipeline v12 · {results.length} total · {filtered.length} showing
         · Scoring: Design 35pts · Geography 25pts · Budget 20pts · Type 20pts
         · Geography covers 153 municipalities across 14 subregions (MA, ME, NH, RI, CT, NY, NJ, PA)
       </div>
