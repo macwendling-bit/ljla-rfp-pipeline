@@ -62,13 +62,21 @@ const SAM_SEARCHES = [
   'planting design',
 ];
 
-// ─── COMMBUYS KEYWORDS (for description search) ───────────────────────────────
-const COMMBUYS_KEYWORDS = [
-  'landscape architect','park design','streetscape','waterfront design',
-  'urban design','open space','master plan','plaza design',
+// ─── COMMBUYS SEARCH TERMS (used as keyword queries against COMMBUYS search API) ──
+const COMMBUYS_SEARCH_TERMS = [
+  'landscape architecture',
+  'landscape architect',
+  'park design',
+  'streetscape',
+  'waterfront design',
+  'urban design',
+  'open space',
+  'master plan',
+  'plaza design',
+  'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v14';
+const STORAGE_KEY = 'ljla_v15';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -192,46 +200,68 @@ export default function App() {
   }
 
   // ── COMMBUYS (MA statewide) ────────────────────────────────────────────────────
+  // Uses keyword search URL for each term — far more targeted than generic open-bids listing.
+  // Each search term fetches pages 1–2 (up to 50 results). Deduped by bid number.
   async function fetchCOMMBUYS() {
     const allOpps = [];
     const seenIds = new Set();
-    setLoadingMsg('COMMBUYS (MA statewide)…');
-    // Fetch open bids listing pages and filter by our keywords
-    // Each page has 25 results; we fetch up to 4 pages = 100 bids to scan
-    try {
-      for (let page = 1; page <= 4; page++) {
-        const url = `https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true&pageNum=${page}`;
-        const html = await fetchViaProxy(url);
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        const rows = doc.querySelectorAll('table tr');
-        for (const row of rows) {
-          const cells = row.querySelectorAll('td');
-          if (cells.length < 5) continue;
-          // Col 0: bid # (link), Col 1: org name, Col 4: description, Col 5: opening date
-          const bidLink = cells[0]?.querySelector('a');
-          if (!bidLink) continue;
-          const bidNum = bidLink.textContent.trim();
-          const href = bidLink.getAttribute('href') || '';
-          const link = href.startsWith('http') ? href : `https://www.commbuys.com${href}`;
-          const orgName = cells[1]?.textContent.trim() || '';
-          const description = cells[4]?.textContent.trim() || '';
-          const dateText = cells[5]?.textContent.trim() || '';
-          if (!isRelevant(bidNum + ' ' + description)) continue;
-          if (seenIds.has(bidNum)) continue;
-          seenIds.add(bidNum);
-          allOpps.push({
-            id: `commbuys-${bidNum.replace(/\W+/g,'-')}`,
-            source:'COMMBUYS', title:description || bidNum,
-            agency: orgName || 'MA Agency',
-            deadline: dateText,
-            link, description:'',
-            bid_number: bidNum,
-            type: /rfp|request for proposal/i.test(description) ? 'RFP' : /rfq/i.test(description) ? 'RFQ' : 'Bid',
-          });
-        }
+
+    function parseCommbuysBidRows(html) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const rows = doc.querySelectorAll('table tr');
+      const results = [];
+      for (const row of rows) {
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 5) continue;
+        // Col 0: bid # (link), Col 1: org name, Col 4: description, Col 5: opening date
+        const bidLink = cells[0]?.querySelector('a');
+        if (!bidLink) continue;
+        const bidNum = bidLink.textContent.trim();
+        if (!bidNum) continue;
+        const href = bidLink.getAttribute('href') || '';
+        const link = href.startsWith('http') ? href : `https://www.commbuys.com${href}`;
+        const orgName = cells[1]?.textContent.trim() || '';
+        const description = cells[4]?.textContent.trim() || '';
+        const dateText = cells[5]?.textContent.trim() || '';
+        results.push({ bidNum, link, orgName, description, dateText });
       }
-    } catch(e) { console.warn('COMMBUYS error:', e.message); }
+      return results;
+    }
+
+    for (const term of COMMBUYS_SEARCH_TERMS) {
+      setLoadingMsg(`COMMBUYS — searching "${term}"…`);
+      try {
+        for (let page = 1; page <= 2; page++) {
+          const encoded = encodeURIComponent(term);
+          const url = `https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?q=${encoded}&currentDocType=bids&pageNum=${page}`;
+          const html = await fetchViaProxy(url);
+          const rows = parseCommbuysBidRows(html);
+          let newOnPage = 0;
+          for (const { bidNum, link, orgName, description, dateText } of rows) {
+            if (seenIds.has(bidNum)) continue;
+            if (!isRelevant(description + ' ' + bidNum)) continue;
+            seenIds.add(bidNum);
+            newOnPage++;
+            allOpps.push({
+              id: `commbuys-${bidNum.replace(/\W+/g, '-')}`,
+              source: 'COMMBUYS',
+              title: description || bidNum,
+              agency: orgName || 'MA Agency',
+              deadline: dateText,
+              link,
+              description: '',
+              bid_number: bidNum,
+              type: /rfp|request for proposal/i.test(description) ? 'RFP'
+                  : /rfq/i.test(description) ? 'RFQ'
+                  : 'Bid',
+            });
+          }
+          // If page 1 returned no rows at all, no point fetching page 2
+          if (page === 1 && rows.length === 0) break;
+        }
+      } catch(e) { console.warn(`COMMBUYS error (term: "${term}"):`, e.message); }
+    }
     return allOpps;
   }
 
@@ -703,7 +733,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'20px 32px', color:BRAND.muted, fontSize:10, borderTop:`1px solid ${BRAND.border}`, textAlign:'center', background:'#fff', marginTop:16 }}>
-        LJLA Public Work Pipeline v14 · 29 CivicEngage towns · Boston · Somerville · Watertown · Portsmouth · Providence · COMMBUYS · NH State · SAM.gov
+        LJLA Public Work Pipeline v15 · 29 CivicEngage towns · Boston · Somerville · Watertown · Portsmouth · Providence · COMMBUYS · NH State · SAM.gov
       </div>
     </div>
   );
