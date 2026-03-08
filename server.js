@@ -71,12 +71,15 @@ app.get('/api/commbuys-pdf', async (req, res) => {
   const PDF_URL = 'https://www.mass.gov/doc/commbuys-home-page-bid-count/download';
 
   const KEYWORDS = [
-    'landscape architect', 'landscape design', 'design services',
-    'park design', 'park master plan', 'park improvement', 'park renovation',
-    'park planning', 'parks design', 'streetscape', 'urban design',
-    'site design', 'open space', 'waterfront design', 'trail design',
-    'plaza design', 'master plan', 'campus landscape', 'planting design',
-    'public realm', 'civic design', 'greenway',
+    'landscape architect', 'landscape architecture', 'landscape design',
+    'landscape services', 'landscape planning', 'landscape improvement',
+    'design services', 'professional services',
+    'site design', 'site planning', 'site improvement',
+    'park design', 'park improvement', 'park master plan', 'park planning',
+    'open space', 'greenway', 'trail design', 'waterfront',
+    'streetscape', 'urban design', 'public realm', 'civic design',
+    'plaza design', 'master plan', 'planting design',
+    'playground design', 'recreation design',
   ];
 
   try {
