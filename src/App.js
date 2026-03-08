@@ -62,21 +62,7 @@ const SAM_SEARCHES = [
   'planting design',
 ];
 
-// ─── COMMBUYS SEARCH TERMS (used as keyword queries against COMMBUYS search API) ──
-const COMMBUYS_SEARCH_TERMS = [
-  'landscape architecture',
-  'landscape architect',
-  'park design',
-  'streetscape',
-  'waterfront design',
-  'urban design',
-  'open space',
-  'master plan',
-  'plaza design',
-  'site design',
-];
-
-const STORAGE_KEY = 'ljla_v24';
+const STORAGE_KEY = 'ljla_v26';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -128,31 +114,28 @@ export default function App() {
   async function fetchSAM(key) {
     const allOpps = [];
     const seenIds = new Set();
-    const NE = ['MA','ME','NH','VT','RI','CT','NY','NJ','PA','MD','VA','DC'];
-    for (const kw of SAM_SEARCHES) {
+    for (let i = 0; i < SAM_SEARCHES.length; i++) {
+      const q = SAM_SEARCHES[i];
+      setLoadingMsg(`SAM.gov — "${q}" (${i+1}/${SAM_SEARCHES.length})…`);
       try {
-        setLoadingMsg(`SAM.gov: "${kw}"…`);
-        const url = `https://api.sam.gov/opportunities/v2/search?api_key=${key}&q=${encodeURIComponent(kw)}&limit=25&postedFrom=01/01/2025&active=true`;
-        const res = await fetch(url);
-        if (!res.ok) continue;
-        const data = await res.json();
-        for (const o of (data.opportunitiesData || [])) {
-          if (seenIds.has(o.noticeId)) continue;
-          const state = (o.placeOfPerformance?.state?.code || '').toUpperCase();
-          if (!NE.includes(state)) continue;
-          if (!isRelevant(o.title)) continue;
-          seenIds.add(o.noticeId);
+        const url = `https://api.sam.gov/opportunities/v2/search?limit=25&offset=0&api_key=${key}&q=${encodeURIComponent(q)}&postedFrom=01/01/2024&active=true`;
+        const data = await fetch(url).then(r => r.json());
+        for (const opp of (data.opportunitiesData || [])) {
+          if (seenIds.has(opp.noticeId)) continue;
+          seenIds.add(opp.noticeId);
+          const title = opp.title || '';
+          if (!isRelevant(title)) continue;
           allOpps.push({
-            id: `sam-${o.noticeId}`,
-            source:'SAM.gov', title:o.title,
-            agency: o.organizationHierarchy?.[0]?.name || 'Federal',
-            deadline: o.responseDeadLine?.substring(0,10) || '',
-            link: `https://sam.gov/opp/${o.noticeId}/view`,
-            description: o.description?.substring(0,200) || '',
-            type: o.type || 'Solicitation',
+            id: `sam-${opp.noticeId}`,
+            source:'SAM.gov', title,
+            agency: opp.department || opp.subtierName || 'Federal',
+            deadline: opp.responseDeadLine ? opp.responseDeadLine.split('T')[0] : '',
+            link: opp.uiLink || `https://sam.gov/opp/${opp.noticeId}/view`,
+            description: opp.description ? opp.description.substring(0,200) : '',
+            type: opp.type === 'p' ? 'RFP' : opp.type === 'k' ? 'Contract' : 'Bid',
           });
         }
-      } catch(e) { console.warn('SAM error:', e.message); }
+      } catch(e) { console.warn(`SAM "${q}":`, e.message); }
     }
     return allOpps;
   }
@@ -201,47 +184,72 @@ export default function App() {
     return allOpps;
   }
 
-  // ── COMMBUYS (MA statewide) ────────────────────────────────────────────────────
+  // ── COMMBUYS (MA statewide) — via server-side PDF parser ──────────────────────
+  // The mass.gov "New Bids Available" PDF is updated regularly and contains all
+  // recent COMMBUYS postings with bid numbers and descriptions. Our server parses it
+  // and filters for landscape/park/design keywords server-side.
   async function fetchCOMMBUYS() {
     const allOpps = [];
-    const seenIds = new Set();
-    const KEYWORDS = ['landscape architecture', 'landscape design', 'design services', 'park'];
+    setLoadingMsg('COMMBUYS — parsing new bids PDF…');
+    try {
+      const data = await fetch('/api/commbuys-pdf').then(r => r.json());
+      if (data.error) throw new Error(data.error);
+      console.log(`COMMBUYS PDF: ${data.count} relevant bids from ${data.pages} pages`);
+      for (const { bidNum, desc, link, org, date } of (data.bids || [])) {
+        allOpps.push({
+          id: `commbuys-${bidNum.replace(/\W+/g,'-')}`,
+          source: 'COMMBUYS',
+          title: desc || bidNum,
+          agency: org || 'MA Agency',
+          deadline: date || '',
+          link,
+          description: '',
+          bid_number: bidNum,
+          type: /rfp|request for proposal/i.test(desc) ? 'RFP' : /rfq/i.test(desc) ? 'RFQ' : 'Bid',
+        });
+      }
+    } catch(e) { console.warn('COMMBUYS PDF error:', e.message); }
+    return allOpps;
+  }
 
-    function parseRows(html) {
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      return [...doc.querySelectorAll('table tr')]
-        .filter(r => r.querySelectorAll('td').length >= 8)
-        .map(r => {
-          const cells = r.querySelectorAll('td');
-          const bidLink = cells[0]?.querySelector('a');
-          if (!bidLink) return null;
-          const bidNum = bidLink.textContent.replace('Bid Solicitation #','').trim();
-          if (!bidNum.startsWith('BD-')) return null;
-          const href = bidLink.getAttribute('href') || '';
-          return {
-            bidNum,
-            link: href.startsWith('http') ? href : 'https://www.commbuys.com' + href,
-            org: cells[2]?.textContent.trim() || 'MA Agency',
-            desc: cells[6]?.textContent.replace('Description','').trim() || bidNum,
-            date: cells[7]?.textContent.trim() || '',
-          };
-        }).filter(Boolean);
-    }
-
-    for (const kw of KEYWORDS) {
-      setLoadingMsg('COMMBUYS — "' + kw + '"…');
+  // ── OpenGov generic fetcher ────────────────────────────────────────────────────
+  // Many NE cities use OpenGov procurement. The API returns JSON with open projects.
+  async function fetchOpenGov(cityName, subdomain, agencyName) {
+    const allOpps = [];
+    setLoadingMsg(`${cityName}…`);
+    try {
+      // Try the public JSON API first
+      const apiUrl = `https://procurement.opengov.com/api/procurements/v2/public/projects?status=published&subdomain=${subdomain}&limit=50`;
+      const text = await fetchViaProxy(apiUrl);
+      let projects = [];
       try {
-        const html = await fetchViaProxy('https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?q=' + encodeURIComponent(kw) + '&currentDocType=bids');
-        const rows = parseRows(html);
-        console.log('COMMBUYS "' + kw + '":', rows.length, 'results');
-        for (const { bidNum, link, org, desc, date } of rows) {
-          if (seenIds.has(bidNum)) continue;
-          seenIds.add(bidNum);
-          allOpps.push({ id:'commbuys-'+bidNum.replace(/\W+/g,'-'), source:'COMMBUYS', title:desc, agency:org, deadline:date, link, description:'', bid_number:bidNum, type:/rfp|request for proposal/i.test(desc)?'RFP':/rfq/i.test(desc)?'RFQ':'Bid' });
-        }
-      } catch(e) { console.warn('COMMBUYS "' + kw + '" error:', e.message); }
-    }
-    console.log('COMMBUYS total:', allOpps.length);
+        const data = JSON.parse(text);
+        projects = data.projects || data.data || data.results || data.items || [];
+      } catch {
+        // API didn't return JSON — fall back to HTML scrape of the embed portal
+        const htmlUrl = `https://procurement.opengov.com/portal/${subdomain}`;
+        const html = await fetchViaProxy(htmlUrl);
+        // OpenGov renders via React so HTML scrape rarely works — just return empty
+        console.warn(`${cityName} OpenGov: API returned non-JSON, HTML fallback unlikely to work`);
+        return allOpps;
+      }
+      console.log(`${cityName} OpenGov: ${projects.length} open projects`);
+      for (const p of projects) {
+        const title = p.name || p.title || p.subject || '';
+        const desc = p.description || p.summary || p.detail || '';
+        if (!isRelevant(title, desc)) continue;
+        const id = `opengov-${subdomain}-${p.id || p.uuid || title.substring(0,20)}`;
+        const link = `https://procurement.opengov.com/portal/${subdomain}/projects/${p.id || ''}`;
+        const deadline = p.close_date || p.due_date || p.closes_at || p.deadline || '';
+        allOpps.push({
+          id, source: cityName, title,
+          agency: agencyName,
+          deadline: deadline ? deadline.split('T')[0] : '',
+          link, description: desc.substring(0,200),
+          type: /rfp|proposal/i.test(title) ? 'RFP' : /rfq|qualifications/i.test(title) ? 'RFQ' : 'Bid',
+        });
+      }
+    } catch(e) { console.warn(`${cityName} OpenGov error:`, e.message); }
     return allOpps;
   }
 
@@ -322,43 +330,34 @@ export default function App() {
     return allOpps;
   }
 
-  // ── Portsmouth NH (OpenGov) ────────────────────────────────────────────────────
-  async function fetchPortsmouth() {
+  // ── NH DAS (statewide NH procurement) ─────────────────────────────────────────
+  async function fetchNHDAS() {
     const allOpps = [];
     const seenIds = new Set();
-    setLoadingMsg('Portsmouth NH…');
+    setLoadingMsg('NH State Procurement…');
     try {
-      // Portsmouth migrated to OpenGov - try both
-      const urls = [
-        'https://procurement.opengov.com/portal/portsmouthnh',
-        'https://www.portsmouthnh.gov/finance/purchasing-bids-and-proposals',
-      ];
-      for (const baseUrl of urls) {
-        try {
-          const html = await fetchViaProxy(baseUrl);
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          const items = doc.querySelectorAll('article, .views-row, li, tr');
-          for (const item of items) {
-            const a = item.querySelector('a[href]');
-            if (!a) continue;
-            const title = a.textContent.replace(/\s+/g,' ').trim();
-            if (!title || title.length < 8 || !isRelevant(title)) continue;
-            const href = a.getAttribute('href');
-            const link = href.startsWith('http') ? href : `https://www.portsmouthnh.gov${href}`;
-            if (seenIds.has(link)) continue;
-            seenIds.add(link);
-            const dateMatch = item.textContent.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
-            allOpps.push({ id:makeId('portsmouth',link), source:'Portsmouth NH', title, agency:'City of Portsmouth NH', deadline:dateMatch?dateMatch[0]:'', link, description:'', type:'Bid' });
-          }
-          if (allOpps.length > 0) break;
-        } catch(e) { /* try next URL */ }
+      const html = await fetchViaProxy('https://apps.das.nh.gov/NHProcurement/Bid');
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const rows = doc.querySelectorAll('table tr, .bid-item, article');
+      for (const row of rows) {
+        const a = row.querySelector('a[href]');
+        if (!a) continue;
+        const title = a.textContent.replace(/\s+/g,' ').trim();
+        if (!title || title.length < 8 || !isRelevant(title)) continue;
+        const href = a.getAttribute('href') || '';
+        const link = href.startsWith('http') ? href : `https://apps.das.nh.gov${href}`;
+        const idKey = link;
+        if (seenIds.has(idKey)) continue;
+        seenIds.add(idKey);
+        const dateMatch = row.textContent.match(/(\d{1,2}\/\d{1,2}\/\d{4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
+        allOpps.push({ id:makeId('nhdas',link), source:'NH State', title, agency:'State of NH', deadline:dateMatch?dateMatch[0]:'', link, description:'', type:'Bid' });
       }
-    } catch(e) { console.warn('Portsmouth error:', e.message); }
+    } catch(e) { console.warn('NH DAS error:', e.message); }
     return allOpps;
   }
 
-  // ── CivicEngage generic ────────────────────────────────────────────────────────
+  // ── CivicEngage / CivicPlus generic (Bids.aspx) ───────────────────────────────
   async function fetchCivicEngage(townName, baseUrl, agency) {
     const allOpps = [];
     const seenIds = new Set();
@@ -394,33 +393,6 @@ export default function App() {
     return allOpps;
   }
 
-  // ── NH DAS (statewide NH procurement) ─────────────────────────────────────────
-  async function fetchNHDAS() {
-    const allOpps = [];
-    const seenIds = new Set();
-    setLoadingMsg('NH State Procurement…');
-    try {
-      const html = await fetchViaProxy('https://apps.das.nh.gov/NHProcurement/Bid');
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const rows = doc.querySelectorAll('table tr, .bid-item, article');
-      for (const row of rows) {
-        const a = row.querySelector('a[href]');
-        if (!a) continue;
-        const title = a.textContent.replace(/\s+/g,' ').trim();
-        if (!title || title.length < 8 || !isRelevant(title)) continue;
-        const href = a.getAttribute('href') || '';
-        const link = href.startsWith('http') ? href : `https://apps.das.nh.gov${href}`;
-        const idKey = link;
-        if (seenIds.has(idKey)) continue;
-        seenIds.add(idKey);
-        const dateMatch = row.textContent.match(/(\d{1,2}\/\d{1,2}\/\d{4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
-        allOpps.push({ id:makeId('nhdas',link), source:'NH State', title, agency:'State of NH', deadline:dateMatch?dateMatch[0]:'', link, description:'', type:'Bid' });
-      }
-    } catch(e) { console.warn('NH DAS error:', e.message); }
-    return allOpps;
-  }
-
   // ── Add manual entry ───────────────────────────────────────────────────────────
   function addManual() {
     if (!manualForm.title.trim()) return;
@@ -435,36 +407,69 @@ export default function App() {
     setShowAddManual(false);
   }
 
-  // ── Run search ─────────────────────────────────────────────────────────────────
+  // ── Town lists ─────────────────────────────────────────────────────────────────
+
+  // CivicPlus (Bids.aspx) towns — scraped with fetchCivicEngage
   const civicEngageTowns = [
-    ['Falmouth MA',    'https://www.falmouthma.gov/Bids.aspx',           'Town of Falmouth'],
-    ['Chatham MA',     'https://www.chatham-ma.gov/Bids.aspx',           'Town of Chatham'],
-    ['Lexington MA',   'https://www.lexingtonma.gov/Bids.aspx',          'Town of Lexington'],
-    ['Concord MA',     'https://www.concordma.gov/Bids.aspx',            'Town of Concord'],
-    ['Needham MA',     'https://www.needhamma.gov/Bids.aspx',            'Town of Needham'],
-    ['Gloucester MA',  'https://www.gloucester-ma.gov/Bids.aspx',        'City of Gloucester'],
-    ['Salem MA',       'https://www.salemma.gov/Bids.aspx',              'City of Salem'],
-    ['Newburyport MA', 'https://www.cityofnewburyport.com/Bids.aspx',    'City of Newburyport'],
-    ['Marblehead MA',  'https://www.marblehead.org/Bids.aspx',           'Town of Marblehead'],
-    ['Hingham MA',     'https://www.hingham-ma.gov/Bids.aspx',           'Town of Hingham'],
-    ['Cohasset MA',    'https://www.cohassetma.org/Bids.aspx',           'Town of Cohasset'],
-    ['Duxbury MA',     'https://www.town.duxbury.ma.us/Bids.aspx',       'Town of Duxbury'],
-    ['Scituate MA',    'https://www.scituatema.gov/Bids.aspx',           'Town of Scituate'],
-    ['Brookline MA',   'https://www.brooklinema.gov/Bids.aspx',          'Town of Brookline'],
-    ['Belmont MA',     'https://www.belmont-ma.gov/bids.aspx',           'Town of Belmont'],
-    ['Milton MA',      'https://www.miltonma.gov/bids.aspx',             'Town of Milton'],
-    ['Wellesley MA',   'https://www.wellesleyma.gov/Bids.aspx',          'Town of Wellesley'],
-    ['Weston MA',      'https://www.weston.org/bids.aspx',               'Town of Weston'],
-    ['Beverly MA',     'https://www.beverlyma.gov/Bids.aspx',            'City of Beverly'],
-    ['Ipswich MA',     'https://www.ipswichma.gov/Bids.aspx',            'Town of Ipswich'],
-    ['Rockport MA',    'https://www.rockportma.gov/Bids.aspx',           'Town of Rockport'],
-    ['Wenham MA',      'https://www.wenhamma.gov/bids.aspx',             'Town of Wenham'],
-    ['Yarmouth MA',    'https://www.yarmouth.ma.us/Bids.aspx',           'Town of Yarmouth'],
-    ['Orleans MA',     'https://www.town.orleans.ma.us/Bids.aspx',       'Town of Orleans'],
-    ['Madison CT',     'https://www.madisonct.org/bids.aspx',            'Town of Madison CT'],
-    ['Winchester MA',  'https://www.winchester-ma.gov/bids.aspx',        'Town of Winchester'],
-    ['Hanover MA',     'https://www.hanover-ma.gov/bids.aspx',           'Town of Hanover'],
-    ['Norwell MA',     'https://www.norwell.ma.us/bids.aspx',            'Town of Norwell'],
+    // MA — established
+    ['Falmouth MA',       'https://www.falmouthma.gov/Bids.aspx',              'Town of Falmouth'],
+    ['Chatham MA',        'https://www.chatham-ma.gov/Bids.aspx',              'Town of Chatham'],
+    ['Lexington MA',      'https://www.lexingtonma.gov/Bids.aspx',             'Town of Lexington'],
+    ['Concord MA',        'https://www.concordma.gov/Bids.aspx',               'Town of Concord'],
+    ['Needham MA',        'https://www.needhamma.gov/Bids.aspx',               'Town of Needham'],
+    ['Gloucester MA',     'https://www.gloucester-ma.gov/Bids.aspx',           'City of Gloucester'],
+    ['Salem MA',          'https://www.salemma.gov/Bids.aspx',                 'City of Salem'],
+    ['Newburyport MA',    'https://www.cityofnewburyport.com/Bids.aspx',       'City of Newburyport'],
+    ['Marblehead MA',     'https://www.marblehead.org/Bids.aspx',              'Town of Marblehead'],
+    ['Hingham MA',        'https://www.hingham-ma.gov/Bids.aspx',              'Town of Hingham'],
+    ['Cohasset MA',       'https://www.cohassetma.org/Bids.aspx',              'Town of Cohasset'],
+    ['Duxbury MA',        'https://www.town.duxbury.ma.us/Bids.aspx',          'Town of Duxbury'],
+    ['Scituate MA',       'https://www.scituatema.gov/Bids.aspx',              'Town of Scituate'],
+    ['Brookline MA',      'https://www.brooklinema.gov/Bids.aspx',             'Town of Brookline'],
+    ['Belmont MA',        'https://www.belmont-ma.gov/bids.aspx',              'Town of Belmont'],
+    ['Milton MA',         'https://www.miltonma.gov/bids.aspx',                'Town of Milton'],
+    ['Wellesley MA',      'https://www.wellesleyma.gov/Bids.aspx',             'Town of Wellesley'],
+    ['Weston MA',         'https://www.weston.org/bids.aspx',                  'Town of Weston'],
+    ['Beverly MA',        'https://www.beverlyma.gov/Bids.aspx',               'City of Beverly'],
+    ['Ipswich MA',        'https://www.ipswichma.gov/Bids.aspx',               'Town of Ipswich'],
+    ['Rockport MA',       'https://www.rockportma.gov/Bids.aspx',              'Town of Rockport'],
+    ['Wenham MA',         'https://www.wenhamma.gov/bids.aspx',                'Town of Wenham'],
+    ['Yarmouth MA',       'https://www.yarmouth.ma.us/Bids.aspx',              'Town of Yarmouth'],
+    ['Orleans MA',        'https://www.town.orleans.ma.us/Bids.aspx',          'Town of Orleans'],
+    ['Winchester MA',     'https://www.winchester-ma.gov/bids.aspx',           'Town of Winchester'],
+    ['Hanover MA',        'https://www.hanover-ma.gov/bids.aspx',              'Town of Hanover'],
+    ['Norwell MA',        'https://www.norwell.ma.us/bids.aspx',               'Town of Norwell'],
+    // MA — new
+    ['Lowell MA',         'https://www.lowellma.gov/Bids.aspx',                'City of Lowell'],
+    ['Chelmsford MA',     'https://www.chelmsfordma.gov/Bids.aspx',            'Town of Chelmsford'],
+    ['Tewksbury MA',      'https://www.tewksbury-ma.gov/Bids.aspx',            'Town of Tewksbury'],
+    // CT
+    ['Madison CT',        'https://www.madisonct.org/bids.aspx',               'Town of Madison CT'],
+    ['Norwalk CT',        'https://www.norwalkct.gov/bids.aspx',               'City of Norwalk CT'],
+    ['Danbury CT',        'https://www.danbury-ct.gov/Bids.aspx',              'City of Danbury CT'],
+    ['Enfield CT',        'https://www.enfield-ct.gov/Bids.aspx',              'Town of Enfield CT'],
+    ['Granby CT',         'https://www.granby-ct.gov/Bids.aspx',               'Town of Granby CT'],
+    ['Wolcott CT',        'https://www.wolcottct.org/Bids.aspx',               'Town of Wolcott CT'],
+    // NH
+    ['Concord NH',        'https://www.concordnh.gov/Bids.aspx',               'City of Concord NH'],
+    ['Rochester NH',      'https://www.rochesternh.gov/bids',                  'City of Rochester NH'],
+    // VT
+    ['Burlington VT',     'https://www.burlingtonvt.gov/Bids.aspx',            'City of Burlington VT'],
+    ['South Burlington VT','https://www.southburlingtonvt.gov/bids.aspx',      'City of South Burlington VT'],
+    ['Montpelier VT',     'https://www.montpelier-vt.org/Bids.aspx',           'City of Montpelier VT'],
+    // ME
+    ['Lewiston ME',       'https://www.ci.lewiston.me.us/Bids.aspx',           'City of Lewiston ME'],
+    ['Bangor ME',         'https://www.bangormaine.gov/Bids.aspx',             'City of Bangor ME'],
+    ['South Portland ME', 'https://www.southportland.gov/Bids.aspx',           'City of South Portland ME'],
+  ];
+
+  // OpenGov cities — fetched via fetchOpenGov API
+  const openGovCities = [
+    ['Cambridge MA',  'cambridgema',        'City of Cambridge MA'],
+    ['Fall River MA', 'fallriverma',        'City of Fall River MA'],
+    ['New Haven CT',  'newhavenct',         'City of New Haven CT'],
+    ['Bridgeport CT', 'bridgeportct',       'City of Bridgeport CT'],
+    ['Portsmouth NH', 'cityofportsmouth',   'City of Portsmouth NH'],
   ];
 
   // ── Merge incoming results into state ──────────────────────────────────────
@@ -490,32 +495,25 @@ export default function App() {
     try {
       // ── Single-source searches ──────────────────────────────────────────────
       if (activeScope === 'commbuys') {
-        const results = await fetchCOMMBUYS();
-        mergeResults(results);
+        mergeResults(await fetchCOMMBUYS());
 
       } else if (activeScope === 'boston') {
-        const results = await fetchBoston();
-        mergeResults(results);
+        mergeResults(await fetchBoston());
 
       } else if (activeScope === 'somerville') {
-        const results = await fetchSomerville();
-        mergeResults(results);
+        mergeResults(await fetchSomerville());
 
       } else if (activeScope === 'watertown') {
-        const results = await fetchWatertown();
-        mergeResults(results);
+        mergeResults(await fetchWatertown());
 
       } else if (activeScope === 'portsmouth') {
-        const results = await fetchPortsmouth();
-        mergeResults(results);
+        mergeResults(await fetchOpenGov('Portsmouth NH', 'cityofportsmouth', 'City of Portsmouth NH'));
 
       } else if (activeScope === 'providence') {
-        const results = await fetchProvidence();
-        mergeResults(results);
+        mergeResults(await fetchProvidence());
 
       } else if (activeScope === 'nhdas') {
-        const results = await fetchNHDAS();
-        mergeResults(results);
+        mergeResults(await fetchNHDAS());
 
       } else if (activeScope === 'towns') {
         setLoadingMsg('Searching all CivicEngage towns…');
@@ -524,38 +522,43 @@ export default function App() {
         );
         mergeResults(arrays.flat());
 
+      } else if (activeScope === 'opengov') {
+        setLoadingMsg('Searching OpenGov cities…');
+        const arrays = await Promise.all(
+          openGovCities.map(([name, sub, agency]) => fetchOpenGov(name, sub, agency))
+        );
+        mergeResults(arrays.flat());
+
       } else if (activeScope === 'sam') {
         if (!apiKey) { setError('SAM.gov requires an API key — click SAM Key to add it.'); return; }
-        const results = await fetchSAM(apiKey);
-        mergeResults(results);
+        mergeResults(await fetchSAM(apiKey));
 
-      // ── Search All: COMMBUYS first, then everything else in parallel ────────
+      // ── Search All: COMMBUYS first, then everything in parallel ─────────────
       } else {
-        // Step 1: COMMBUYS first, alone, so it gets full proxy bandwidth
-        const commbuysResults = await fetchCOMMBUYS();
-        mergeResults(commbuysResults);
+        // Step 1: COMMBUYS via PDF (server-side, no proxy contention)
+        mergeResults(await fetchCOMMBUYS());
 
-        // Step 2: All other sources in parallel
+        // Step 2: Everything else in parallel
         setLoadingMsg('Searching remaining sources…');
         const [
           samResults, bostonResults, watertownResults,
-          portsmouthResults, somervilleResults, providenceResults,
-          nhdasResults, ...civicArrays
+          somervilleResults, providenceResults, nhdasResults,
+          ...restArrays
         ] = await Promise.all([
           apiKey ? fetchSAM(apiKey) : Promise.resolve([]),
           fetchBoston(),
           fetchWatertown(),
-          fetchPortsmouth(),
           fetchSomerville(),
           fetchProvidence(),
           fetchNHDAS(),
           ...civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency)),
+          ...openGovCities.map(([name, sub, agency]) => fetchOpenGov(name, sub, agency)),
         ]);
 
         mergeResults([
           ...samResults, ...bostonResults, ...watertownResults,
-          ...portsmouthResults, ...somervilleResults, ...providenceResults,
-          ...nhdasResults, ...civicArrays.flat(),
+          ...somervilleResults, ...providenceResults, ...nhdasResults,
+          ...restArrays.flat(),
         ]);
       }
 
@@ -601,7 +604,7 @@ export default function App() {
   return (
     <div style={{ fontFamily:"'Poppins','Helvetica Neue',Arial,sans-serif", background:'#fff', minHeight:'100vh', color:BRAND.text }}>
 
-      {/* Top nav — mirrors leblancjones.com header */}
+      {/* Top nav */}
       <div style={{ padding:'22px 48px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:`1px solid ${BRAND.border}` }}>
         <div style={{ color:BRAND.primary, fontSize:14, fontWeight:400, letterSpacing:0.2 }}>
           LeBlanc Jones Landscape Architects
@@ -612,34 +615,32 @@ export default function App() {
 
           {/* Split search button */}
           <div style={{ position:'relative', display:'flex' }}>
-            {/* Dropdown arrow */}
             <button
               disabled={loading}
               onClick={() => setShowScopeMenu(v => !v)}
               style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer', padding:'7px 10px', borderRight:'1px solid rgba(255,255,255,0.25)' }}
             >▾</button>
-            {/* Main search button */}
             <button
               disabled={loading}
               onClick={() => runSearch(searchScope)}
               style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer', borderLeft:'none' }}
             >
               {loading ? (loadingMsg || 'Searching…') : (
-                searchScope === 'all' ? 'Search All' :
-                searchScope === 'commbuys' ? 'Search COMMBUYS' :
-                searchScope === 'boston' ? 'Search Boston' :
+                searchScope === 'all'        ? 'Search All' :
+                searchScope === 'commbuys'   ? 'Search COMMBUYS' :
+                searchScope === 'boston'     ? 'Search Boston' :
                 searchScope === 'somerville' ? 'Search Somerville' :
-                searchScope === 'watertown' ? 'Search Watertown' :
+                searchScope === 'watertown'  ? 'Search Watertown' :
                 searchScope === 'portsmouth' ? 'Search Portsmouth' :
                 searchScope === 'providence' ? 'Search Providence' :
-                searchScope === 'nhdas' ? 'Search NH State' :
-                searchScope === 'sam' ? 'Search SAM.gov' :
-                searchScope === 'towns' ? 'Search Towns' : 'Search'
+                searchScope === 'nhdas'      ? 'Search NH State' :
+                searchScope === 'opengov'    ? 'Search OpenGov Cities' :
+                searchScope === 'sam'        ? 'Search SAM.gov' :
+                searchScope === 'towns'      ? 'Search Towns' : 'Search'
               )}
             </button>
-            {/* Dropdown menu */}
             {showScopeMenu && !loading && (
-              <div style={{ position:'absolute', top:'100%', right:0, zIndex:100, background:'#fff', border:`1px solid ${BRAND.border}`, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', minWidth:200, marginTop:4 }}>
+              <div style={{ position:'absolute', top:'100%', right:0, zIndex:100, background:'#fff', border:`1px solid ${BRAND.border}`, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', minWidth:220, marginTop:4 }}>
                 {[
                   ['all',        'Search All Sources'],
                   ['commbuys',   'COMMBUYS (MA statewide)'],
@@ -649,6 +650,7 @@ export default function App() {
                   ['portsmouth', 'Portsmouth NH'],
                   ['providence', 'Providence RI'],
                   ['nhdas',      'NH State Procurement'],
+                  ['opengov',    'OpenGov Cities'],
                   ['towns',      'All Towns'],
                   ['sam',        'SAM.gov'],
                 ].map(([key, label]) => (
@@ -735,7 +737,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Opportunity list — editorial rows, no card boxes */}
+      {/* Opportunity list */}
       <div style={{ padding:'12px 48px 48px' }}>
 
         {filtered.length === 0 && !loading && (
@@ -750,21 +752,18 @@ export default function App() {
           const typeColor = opp.type === 'RFP' ? BRAND.primary : opp.type === 'RFQ' ? '#5A9BD4' : BRAND.muted;
           return (
             <div key={opp.id}>
-              {/* Hairline divider */}
               <div style={{ borderTop: idx === 0 ? `1px solid ${BRAND.border}` : 'none' }} />
               <div style={{ borderTop:`1px solid ${BRAND.border}`, padding:'18px 0', cursor:'pointer' }}
                 onClick={() => setExpandedId(isExpanded ? null : opp.id)}>
 
                 <div style={{ display:'flex', alignItems:'flex-start', gap:20 }}>
 
-                  {/* Type pill — left column, fixed width */}
                   <div style={{ minWidth:44, paddingTop:2 }}>
                     <span style={{ fontSize:9, color:typeColor, fontWeight:600, letterSpacing:1, textTransform:'uppercase' }}>
                       {opp.type || 'Bid'}
                     </span>
                   </div>
 
-                  {/* Main content */}
                   <div style={{ flex:1, minWidth:0 }}>
                     {opp.link ? (
                       <a href={opp.link} target="_blank" rel="noreferrer"
@@ -788,13 +787,11 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Expand toggle */}
                   <div style={{ fontSize:10, color:BRAND.muted, paddingTop:4, userSelect:'none' }}>
                     {isExpanded ? '−' : '+'}
                   </div>
                 </div>
 
-                {/* Expanded panel */}
                 {isExpanded && (
                   <div style={{ marginTop:12, paddingLeft:64 }}>
                     {opp.bid_number && (
@@ -834,8 +831,8 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v24</span>
-        <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v26</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>44 towns · Boston · COMMBUYS · OpenGov cities · NH · Providence · SAM.gov</span>
       </div>
     </div>
   );
