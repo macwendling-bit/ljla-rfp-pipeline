@@ -76,7 +76,7 @@ const COMMBUYS_SEARCH_TERMS = [
   'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v16';
+const STORAGE_KEY = 'ljla_v17';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -235,9 +235,8 @@ export default function App() {
       setLoadingMsg(`COMMBUYS — searching "${term}"…`);
       try {
         for (let page = 1; page <= 2; page++) {
-          const encoded = encodeURIComponent(term);
-          const url = `https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?q=${encoded}&currentDocType=bids&pageNum=${page}`;
-          const html = await fetchViaProxy(url);
+          // Use dedicated /api/commbuys endpoint which handles JSF session cookie
+          const html = await fetch(`/api/commbuys?q=${encodeURIComponent(term)}&page=${page}`).then(r => r.text());
           const rows = parseCommbuysBidRows(html);
           let newOnPage = 0;
           for (const { bidNum, link, orgName, description, dateText } of rows) {
@@ -767,7 +766,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v16</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v17</span>
         <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
       </div>
     </div>
