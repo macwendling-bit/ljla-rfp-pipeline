@@ -64,50 +64,78 @@ app.get('/api/fetch', (req, res) => {
   proxyReq.end();
 });
 
-// ─── COMMBUYS dedicated endpoint ──────────────────────────────────────────
-// COMMBUYS is a JSF app — requires a valid JSESSIONID session cookie for
-// search results to render. This endpoint does a two-step fetch:
-// 1. GET the base search page → capture JSESSIONID cookie
-// 2. GET the keyword search URL with that cookie → returns results HTML
+// ─── COMMBUYS keyword search endpoint ─────────────────────────────────────
+// COMMBUYS is a JSF app. Proper search requires:
+// 1. GET base page → extract JSESSIONID cookie + javax.faces.ViewState
+// 2. POST to search endpoint with ViewState + keyword → returns results HTML
 app.get('/api/commbuys', async (req, res) => {
   const keyword = req.query.q || 'landscape architecture';
-  const pageNum = req.query.page || '1';
 
-  function httpsGet(urlStr, extraHeaders) {
+  function httpsRequest(urlStr, method, headers, postBody) {
     return new Promise((resolve, reject) => {
       const parsed = new url.URL(urlStr);
+      const bodyBuf = postBody ? Buffer.from(postBody, 'utf8') : null;
       const options = {
         hostname: parsed.hostname,
         path: parsed.pathname + parsed.search,
-        method: 'GET',
-        headers: { ...BROWSER_HEADERS, ...extraHeaders },
-        timeout: 15000,
+        method,
+        headers: {
+          ...BROWSER_HEADERS,
+          ...headers,
+          ...(bodyBuf ? { 'Content-Length': bodyBuf.length } : {}),
+        },
+        timeout: 20000,
       };
       const req = https.request(options, response => {
         const cookies = response.headers['set-cookie'] || [];
+        const location = response.headers['location'] || null;
         let body = '';
         response.setEncoding('utf8');
         response.on('data', c => { body += c; });
-        response.on('end', () => resolve({ body, cookies, status: response.statusCode }));
+        response.on('end', () => resolve({ body, cookies, status: response.statusCode, location }));
       });
       req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
       req.on('error', reject);
+      if (bodyBuf) req.write(bodyBuf);
       req.end();
     });
   }
 
   try {
-    // Step 1: GET base page to acquire session cookie
-    const baseUrl = 'https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml';
-    const step1 = await httpsGet(baseUrl, {});
+    const BASE = 'https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml';
+
+    // Step 1: GET page to acquire session cookie + ViewState
+    const step1 = await httpsRequest(BASE, 'GET', {}, null);
     const cookieStr = step1.cookies.map(c => c.split(';')[0]).join('; ');
 
-    // Step 2: GET search results with session cookie
-    const searchUrl = `${baseUrl}?q=${encodeURIComponent(keyword)}&currentDocType=bids&pageNum=${pageNum}`;
-    const step2 = await httpsGet(searchUrl, { 'Cookie': cookieStr, 'Referer': baseUrl });
+    // Extract javax.faces.ViewState from the HTML
+    const vsMatch = step1.body.match(/javax\.faces\.ViewState[^>]*value="([^"]+)"/);
+    if (!vsMatch) {
+      return res.status(502).json({ error: 'Could not find JSF ViewState', bodySnippet: step1.body.slice(0, 500) });
+    }
+    const viewState = vsMatch[1];
+
+    // Step 2: POST keyword search using the ViewState
+    const formData = new URLSearchParams({
+      'searchForm': 'searchForm',
+      'searchForm:keywordTextBox': keyword,
+      'searchForm:currentDocType': 'bids',
+      'searchForm:bidSearchButton': 'searchForm:bidSearchButton',
+      'javax.faces.ViewState': viewState,
+      'javax.faces.partial.ajax': 'false',
+    }).toString();
+
+    const step2 = await httpsRequest(BASE, 'POST', {
+      'Cookie': cookieStr,
+      'Referer': BASE,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://www.commbuys.com',
+    }, formData);
 
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'text/html');
+    res.setHeader('X-ViewState-Found', 'true');
+    res.setHeader('X-Post-Status', step2.status);
     res.send(step2.body);
   } catch (e) {
     res.status(502).json({ error: `COMMBUYS fetch failed: ${e.message}` });
