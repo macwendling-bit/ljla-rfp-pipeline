@@ -210,13 +210,25 @@ app.get('/api/commbuys-pdf', async (req, res) => {
   const KEYWORDS = ['landscape architecture', 'landscape design', 'design services', 'park'];
   try {
     // Fetch PDF as binary
+    // Follow redirects manually (mass.gov redirects to CDN)
     const pdfBuf = await new Promise((resolve, reject) => {
-      https.get(PDF_URL, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/pdf,*/*' } }, (r) => {
-        const chunks = [];
-        r.on('data', c => chunks.push(c));
-        r.on('end', () => resolve(Buffer.concat(chunks)));
-        r.on('error', reject);
-      }).on('error', reject);
+      function fetchUrl(targetUrl, redirects) {
+        if (redirects > 5) return reject(new Error('Too many redirects'));
+        const mod = targetUrl.startsWith('https') ? https : http;
+        const options = { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36', 'Accept': 'application/pdf,*/*', 'Accept-Encoding': 'identity' } };
+        mod.get(targetUrl, options, (r) => {
+          if ([301,302,303,307,308].includes(r.statusCode) && r.headers.location) {
+            const next = r.headers.location.startsWith('http') ? r.headers.location : new url.URL(r.headers.location, targetUrl).toString();
+            r.resume();
+            return fetchUrl(next, redirects + 1);
+          }
+          const chunks = [];
+          r.on('data', c => chunks.push(c));
+          r.on('end', () => resolve(Buffer.concat(chunks)));
+          r.on('error', reject);
+        }).on('error', reject);
+      }
+      fetchUrl(PDF_URL, 0);
     });
 
     const pdfParse = require('pdf-parse');
