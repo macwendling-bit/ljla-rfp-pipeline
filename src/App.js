@@ -11,47 +11,38 @@ const BRAND = {
 };
 
 // ─── FILTER ───────────────────────────────────────────────────────────────────
+// Broad pass terms — ONE match anywhere in title+description is enough
 const PASS_TERMS = [
-  'landscape architect','landscape architecture','landscape design',
-  'planting design','horticultural','site landscape',
-  'design services','planning and design','design and planning',
-  'design consultant','planning services','master plan','masterplan',
-  'conceptual design','schematic design','professional design',
-  'park design','park master plan','park improvement','park renovation',
-  'park planning','parks design','recreation design','playground design',
-  'open space design','open space plan','greenway design','trail design',
-  'waterfront design','waterfront planning','waterfront master plan',
-  'harbor design','esplanade design','riverwalk','harborwalk',
-  'plaza design','plaza improvement','streetscape design',
-  'streetscape improvement','streetscape planning','promenade design',
-  'campus design','campus landscape','institutional landscape',
-  'urban design','public realm design','civic design',
-  'courtyard design','rooftop garden','outdoor amenity design',
-  'residential landscape','amenity landscape','designer services',
-  'site design','site planning','landscape services rfp','landscape services rfq',
+  'landscape architect','landscape architecture','landscape design','landscape services',
+  'landscape planning','landscape improvement','landscape master plan',
+  'design services','professional services',
+  'site design','site planning','site improvement',
+  'park design','park improvement','park master plan','park renovation','park planning',
+  'open space','greenway','trail design','waterfront','riverwalk','harborwalk',
+  'streetscape','urban design','public realm','civic design',
+  'plaza design','plaza improvement','promenade',
+  'master plan','masterplan',
+  'planting design','horticultural',
+  'campus design','campus landscape',
+  'playground design','recreation design',
+  'rfp for design','rfq for design','request for proposal.*design','request for qualifications.*landscape',
 ];
 
+// Only filter out things that are definitively NOT design work
 const HARD_NO = [
-  'snow removal','snow plowing','salting','sanding',
-  'lawn care','mowing','grounds keeping','landscape maintenance','turf management',
-  'janitorial','custodial','cleaning services','trash removal','rubbish','waste removal',
-  'hvac','plumbing','electrical contractor','boiler','mechanical','generator',
-  'elevator','fire suppression','roofing','roof replacement',
-  'water main','sewer line','roadway construction','paving contractor','asphalt',
-  'concrete contractor','crack seal','pavement marking','guardrail',
-  'retaining wall','sidewalk repair','curb replacement',
-  'audit','accounting','legal services','food service','catering',
-  'printing services','mailing','shuttle','vehicle purchase','fuel supply',
-  'medical','pharmaceutical','ammunition','weapons','staffing agency',
-  'security guard','real estate broker','insurance services',
-  'information technology','cybersecurity','software development',
-  'network infrastructure','telecommunications',
+  'snow removal','snow plowing','lawn mowing','grounds keeping',
+  'lawn care service','turf management',
+  'janitorial','custodial','trash removal',
+  'food service','catering',
+  'staffing agency','security guard',
+  'medical supply','pharmaceutical','ammunition',
+  'information technology','cybersecurity',
 ];
 
 function isRelevant(title, description) {
   const t = ((title || '') + ' ' + (description || '')).toLowerCase();
   if (HARD_NO.some(k => t.includes(k))) return false;
-  return PASS_TERMS.some(k => t.includes(k));
+  return PASS_TERMS.some(k => new RegExp(k).test(t));
 }
 
 // ─── CTSOURCE SEARCH TERMS ────────────────────────────────────────────────────
@@ -62,7 +53,7 @@ const CTSOURCE_KEYWORDS = [
   'park design',
 ];
 
-const STORAGE_KEY = 'ljla_v27';
+const STORAGE_KEY = 'ljla_v28';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -78,6 +69,7 @@ export default function App() {
   const [manualForm, setManualForm]       = useState({ title:'', agency:'', deadline:'', link:'', notes:'' });
   const [searchScope, setSearchScope]     = useState('all');
   const [showScopeMenu, setShowScopeMenu] = useState(false);
+  const [showSources, setShowSources]     = useState(false);
 
   // ── Persist ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -367,6 +359,45 @@ export default function App() {
     return allOpps;
   }
 
+  // ── Generic city-run HTML scraper ─────────────────────────────────────────────
+  // Works for any city site that lists bids as simple HTML links/rows.
+  async function fetchGenericCityRun(name, url, agency) {
+    const allOpps = [];
+    const seenIds = new Set();
+    setLoadingMsg(`${name}…`);
+    try {
+      const html = await fetchViaProxy(url);
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const origin = (() => { try { return new URL(url).origin; } catch { return ''; } })();
+      // Walk all anchor tags — title = text content or nearby heading
+      for (const a of doc.querySelectorAll('a[href]')) {
+        const href = a.getAttribute('href') || '';
+        if (!href || href === '#' || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
+        const rawTitle = a.textContent.replace(/\s+/g,' ').trim();
+        if (!rawTitle || rawTitle.length < 6 || rawTitle.length > 300) continue;
+        // Skip navigation-style links
+        if (/^(home|about|contact|menu|back|next|prev|login|sign\s?in|register|submit)$/i.test(rawTitle)) continue;
+        if (!isRelevant(rawTitle)) continue;
+        const link = href.startsWith('http') ? href : (href.startsWith('/') ? `${origin}${href}` : `${url}/${href}`);
+        const idKey = link || rawTitle.substring(0,40);
+        if (seenIds.has(idKey)) continue;
+        seenIds.add(idKey);
+        // Try to extract a date from surrounding text
+        const parent = a.closest('tr, li, div, article, p') || a.parentElement;
+        const dateMatch = parent?.textContent.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})|([A-Z][a-z]+ \d{1,2},?\s*\d{4})/);
+        allOpps.push({
+          id: makeId(name.toLowerCase().replace(/\s+/g,'-'), idKey),
+          source: name, title: rawTitle, agency,
+          deadline: dateMatch ? dateMatch[0] : '',
+          link, description: '', 
+          type: /rfp|proposal/i.test(rawTitle)?'RFP':/rfq|qualif/i.test(rawTitle)?'RFQ':'Bid',
+        });
+      }
+    } catch(e) { console.warn(`${name} error:`, e.message); }
+    return allOpps;
+  }
+
   // ── CivicEngage / CivicPlus generic (Bids.aspx) ───────────────────────────────
   async function fetchCivicEngage(townName, baseUrl, agency) {
     const allOpps = [];
@@ -417,70 +448,121 @@ export default function App() {
     setShowAddManual(false);
   }
 
-  // ── Town lists ─────────────────────────────────────────────────────────────────
+  // ── Source Registry — organized by state ──────────────────────────────────────
 
-  // CivicPlus (Bids.aspx) towns — scraped with fetchCivicEngage
-  const civicEngageTowns = [
-    // MA — established
-    ['Falmouth MA',       'https://www.falmouthma.gov/Bids.aspx',              'Town of Falmouth'],
-    ['Chatham MA',        'https://www.chatham-ma.gov/Bids.aspx',              'Town of Chatham'],
-    ['Lexington MA',      'https://www.lexingtonma.gov/Bids.aspx',             'Town of Lexington'],
-    ['Concord MA',        'https://www.concordma.gov/Bids.aspx',               'Town of Concord'],
-    ['Needham MA',        'https://www.needhamma.gov/Bids.aspx',               'Town of Needham'],
-    ['Gloucester MA',     'https://www.gloucester-ma.gov/Bids.aspx',           'City of Gloucester'],
-    ['Salem MA',          'https://www.salemma.gov/Bids.aspx',                 'City of Salem'],
-    ['Newburyport MA',    'https://www.cityofnewburyport.com/Bids.aspx',       'City of Newburyport'],
-    ['Marblehead MA',     'https://www.marblehead.org/Bids.aspx',              'Town of Marblehead'],
-    ['Hingham MA',        'https://www.hingham-ma.gov/Bids.aspx',              'Town of Hingham'],
-    ['Cohasset MA',       'https://www.cohassetma.org/Bids.aspx',              'Town of Cohasset'],
-    ['Duxbury MA',        'https://www.town.duxbury.ma.us/Bids.aspx',          'Town of Duxbury'],
-    ['Scituate MA',       'https://www.scituatema.gov/Bids.aspx',              'Town of Scituate'],
-    ['Brookline MA',      'https://www.brooklinema.gov/Bids.aspx',             'Town of Brookline'],
-    ['Belmont MA',        'https://www.belmont-ma.gov/bids.aspx',              'Town of Belmont'],
-    ['Milton MA',         'https://www.miltonma.gov/bids.aspx',                'Town of Milton'],
-    ['Wellesley MA',      'https://www.wellesleyma.gov/Bids.aspx',             'Town of Wellesley'],
-    ['Weston MA',         'https://www.weston.org/bids.aspx',                  'Town of Weston'],
-    ['Beverly MA',        'https://www.beverlyma.gov/Bids.aspx',               'City of Beverly'],
-    ['Ipswich MA',        'https://www.ipswichma.gov/Bids.aspx',               'Town of Ipswich'],
-    ['Rockport MA',       'https://www.rockportma.gov/Bids.aspx',              'Town of Rockport'],
-    ['Wenham MA',         'https://www.wenhamma.gov/bids.aspx',                'Town of Wenham'],
-    ['Yarmouth MA',       'https://www.yarmouth.ma.us/Bids.aspx',              'Town of Yarmouth'],
-    ['Orleans MA',        'https://www.town.orleans.ma.us/Bids.aspx',          'Town of Orleans'],
-    ['Winchester MA',     'https://www.winchester-ma.gov/bids.aspx',           'Town of Winchester'],
-    ['Hanover MA',        'https://www.hanover-ma.gov/bids.aspx',              'Town of Hanover'],
-    ['Norwell MA',        'https://www.norwell.ma.us/bids.aspx',               'Town of Norwell'],
-    // MA — new
-    ['Lowell MA',         'https://www.lowellma.gov/Bids.aspx',                'City of Lowell'],
-    ['Chelmsford MA',     'https://www.chelmsfordma.gov/Bids.aspx',            'Town of Chelmsford'],
-    ['Tewksbury MA',      'https://www.tewksbury-ma.gov/Bids.aspx',            'Town of Tewksbury'],
-    // CT
-    ['Madison CT',        'https://www.madisonct.org/bids.aspx',               'Town of Madison CT'],
-    ['Norwalk CT',        'https://www.norwalkct.gov/bids.aspx',               'City of Norwalk CT'],
-    ['Danbury CT',        'https://www.danbury-ct.gov/Bids.aspx',              'City of Danbury CT'],
-    ['Enfield CT',        'https://www.enfield-ct.gov/Bids.aspx',              'Town of Enfield CT'],
-    ['Granby CT',         'https://www.granby-ct.gov/Bids.aspx',               'Town of Granby CT'],
-    ['Wolcott CT',        'https://www.wolcottct.org/Bids.aspx',               'Town of Wolcott CT'],
-    // NH
-    ['Concord NH',        'https://www.concordnh.gov/Bids.aspx',               'City of Concord NH'],
-    ['Rochester NH',      'https://www.rochesternh.gov/bids',                  'City of Rochester NH'],
-    // VT
-    ['Burlington VT',     'https://www.burlingtonvt.gov/Bids.aspx',            'City of Burlington VT'],
+  // CivicPlus towns (Bids.aspx pattern) — grouped by state
+  const cpMA = [
+    ['Falmouth MA',        'https://www.falmouthma.gov/Bids.aspx',             'Town of Falmouth'],
+    ['Chatham MA',         'https://www.chatham-ma.gov/Bids.aspx',             'Town of Chatham'],
+    ['Lexington MA',       'https://www.lexingtonma.gov/Bids.aspx',            'Town of Lexington'],
+    ['Concord MA',         'https://www.concordma.gov/Bids.aspx',              'Town of Concord'],
+    ['Needham MA',         'https://www.needhamma.gov/Bids.aspx',              'Town of Needham'],
+    ['Gloucester MA',      'https://www.gloucester-ma.gov/Bids.aspx',          'City of Gloucester'],
+    ['Salem MA',           'https://www.salemma.gov/Bids.aspx',                'City of Salem'],
+    ['Newburyport MA',     'https://www.cityofnewburyport.com/Bids.aspx',      'City of Newburyport'],
+    ['Marblehead MA',      'https://www.marblehead.org/Bids.aspx',             'Town of Marblehead'],
+    ['Hingham MA',         'https://www.hingham-ma.gov/Bids.aspx',             'Town of Hingham'],
+    ['Cohasset MA',        'https://www.cohassetma.org/Bids.aspx',             'Town of Cohasset'],
+    ['Duxbury MA',         'https://www.town.duxbury.ma.us/Bids.aspx',         'Town of Duxbury'],
+    ['Scituate MA',        'https://www.scituatema.gov/Bids.aspx',             'Town of Scituate'],
+    ['Brookline MA',       'https://www.brooklinema.gov/Bids.aspx',            'Town of Brookline'],
+    ['Belmont MA',         'https://www.belmont-ma.gov/bids.aspx',             'Town of Belmont'],
+    ['Milton MA',          'https://www.miltonma.gov/bids.aspx',               'Town of Milton'],
+    ['Wellesley MA',       'https://www.wellesleyma.gov/Bids.aspx',            'Town of Wellesley'],
+    ['Weston MA',          'https://www.weston.org/bids.aspx',                 'Town of Weston'],
+    ['Beverly MA',         'https://www.beverlyma.gov/Bids.aspx',              'City of Beverly'],
+    ['Ipswich MA',         'https://www.ipswichma.gov/Bids.aspx',              'Town of Ipswich'],
+    ['Rockport MA',        'https://www.rockportma.gov/Bids.aspx',             'Town of Rockport'],
+    ['Wenham MA',          'https://www.wenhamma.gov/bids.aspx',               'Town of Wenham'],
+    ['Yarmouth MA',        'https://www.yarmouth.ma.us/Bids.aspx',             'Town of Yarmouth'],
+    ['Orleans MA',         'https://www.town.orleans.ma.us/Bids.aspx',         'Town of Orleans'],
+    ['Winchester MA',      'https://www.winchester-ma.gov/bids.aspx',          'Town of Winchester'],
+    ['Hanover MA',         'https://www.hanover-ma.gov/bids.aspx',             'Town of Hanover'],
+    ['Norwell MA',         'https://www.norwell.ma.us/bids.aspx',              'Town of Norwell'],
+    ['Lowell MA',          'https://www.lowellma.gov/Bids.aspx',               'City of Lowell'],
+    ['Chelmsford MA',      'https://www.chelmsfordma.gov/Bids.aspx',           'Town of Chelmsford'],
+    ['Tewksbury MA',       'https://www.tewksbury-ma.gov/Bids.aspx',           'Town of Tewksbury'],
+  ];
+  const cpCT = [
+    ['Madison CT',         'https://www.madisonct.org/bids.aspx',              'Town of Madison CT'],
+    ['Norwalk CT',         'https://www.norwalkct.gov/bids.aspx',              'City of Norwalk CT'],
+    ['Danbury CT',         'https://www.danbury-ct.gov/Bids.aspx',             'City of Danbury CT'],
+    ['Enfield CT',         'https://www.enfield-ct.gov/Bids.aspx',             'Town of Enfield CT'],
+    ['Granby CT',          'https://www.granby-ct.gov/Bids.aspx',              'Town of Granby CT'],
+    ['Wolcott CT',         'https://www.wolcottct.org/Bids.aspx',              'Town of Wolcott CT'],
+  ];
+  const cpRI = [
+    ['Warwick RI',         'https://www.warwickri.gov/bids',                   'City of Warwick RI'],
+  ];
+  const cpNH = [
+    ['Concord NH',         'https://www.concordnh.gov/Bids.aspx',              'City of Concord NH'],
+    ['Rochester NH',       'https://www.rochesternh.gov/bids',                 'City of Rochester NH'],
+  ];
+  const cpVT = [
+    ['Burlington VT',      'https://www.burlingtonvt.gov/Bids.aspx',           'City of Burlington VT'],
     ['South Burlington VT','https://www.southburlingtonvt.gov/bids.aspx',      'City of South Burlington VT'],
-    ['Montpelier VT',     'https://www.montpelier-vt.org/Bids.aspx',           'City of Montpelier VT'],
-    // ME
-    ['Lewiston ME',       'https://www.ci.lewiston.me.us/Bids.aspx',           'City of Lewiston ME'],
-    ['Bangor ME',         'https://www.bangormaine.gov/Bids.aspx',             'City of Bangor ME'],
-    ['South Portland ME', 'https://www.southportland.gov/Bids.aspx',           'City of South Portland ME'],
+    ['Montpelier VT',      'https://www.montpelier-vt.org/Bids.aspx',          'City of Montpelier VT'],
+  ];
+  const cpME = [
+    ['Lewiston ME',        'https://www.ci.lewiston.me.us/Bids.aspx',          'City of Lewiston ME'],
+    ['Bangor ME',          'https://www.bangormaine.gov/Bids.aspx',             'City of Bangor ME'],
+    ['South Portland ME',  'https://www.southportland.gov/Bids.aspx',          'City of South Portland ME'],
+    ['Portland ME',        'https://www.portlandmaine.gov/1210/Current-BidsRFPs', 'City of Portland ME'],
   ];
 
-  // OpenGov cities — fetched via fetchOpenGov API
-  const openGovCities = [
-    ['Cambridge MA',  'cambridgema',        'City of Cambridge MA'],
-    ['Fall River MA', 'fallriverma',        'City of Fall River MA'],
-    ['New Haven CT',  'newhavenct',         'City of New Haven CT'],
-    ['Bridgeport CT', 'bridgeportct',       'City of Bridgeport CT'],
-    ['Portsmouth NH', 'cityofportsmouth',   'City of Portsmouth NH'],
+  // OpenGov cities — grouped by state
+  const ogMA = [
+    ['Cambridge MA',   'cambridgema',      'City of Cambridge MA'],
+    ['Fall River MA',  'fallriverma',      'City of Fall River MA'],
   ];
+  const ogCT = [
+    ['New Haven CT',   'newhavenct',       'City of New Haven CT'],
+    ['Bridgeport CT',  'bridgeportct',     'City of Bridgeport CT'],
+  ];
+  const ogNH = [
+    ['Portsmouth NH',  'cityofportsmouth', 'City of Portsmouth NH'],
+  ];
+
+  // Generic city-run scrapers — [name, url, agency] — grouped by state
+  const cityRunMA = [
+    ['Worcester MA',   'https://www.worcesterma.gov/finance/purchasing-bids/bids/open-bids',          'City of Worcester MA'],
+    ['Springfield MA', 'https://www.springfield-ma.gov/finance/procurement-bids/',                   'City of Springfield MA'],
+    ['Quincy MA',      'https://www.quincyma.gov/departments/purchasing/current_bids.php',            'City of Quincy MA'],
+    ['Lynn MA',        'https://www.lynnma.gov/city_government/departments/purchasing/public_notices','City of Lynn MA'],
+  ];
+  const cityRunCT = [
+    ['New Britain CT', 'https://www.newbritainct.gov/services/purchasing/bidshtm',                   'City of New Britain CT'],
+  ];
+  const cityRunRI = [
+    ['Pawtucket RI',      'https://pawtucketri.gov/purchasing-department/current-bids/',             'City of Pawtucket RI'],
+    ['East Providence RI','https://eastprovidenceri.gov/rfp',                                        'City of East Providence RI'],
+  ];
+  const cityRunNH = [
+    ['Manchester NH',  'https://www.manchesternh.gov/Departments/Purchasing/Bid-Opportunities-and-Results', 'City of Manchester NH'],
+  ];
+  const cityRunME = [
+    ['Auburn ME',      'https://www.auburnmaine.gov/departments/finance/bids/index.php',             'City of Auburn ME'],
+    ['Augusta ME',     'https://www.augustamaine.gov/index.php?docid=4618&section=purchasing',       'City of Augusta ME'],
+  ];
+  const cityRunVT = [
+    ['Rutland VT',     'https://www.rutlandcity.org/departments/clerks-office/bids-requests-for-proposals-rfps/', 'City of Rutland VT'],
+  ];
+
+  // Helper: run all fetchers for a state in parallel
+  async function runStateSearch(stateLabel, fetchers) {
+    setLoadingMsg(`Searching ${stateLabel}…`);
+    const arrays = await Promise.all(fetchers);
+    mergeResults(arrays.flat());
+  }
+
+  // Helpers that expand arrays into fetch calls
+  const fetchAllCP = (arr) => arr.map(([n,u,a]) => fetchCivicEngage(n,u,a));
+  const fetchAllOG = (arr) => arr.map(([n,s,a]) => fetchOpenGov(n,s,a));
+  const fetchAllCR = (arr) => arr.map(([n,u,a]) => fetchGenericCityRun(n,u,a));
+
+  // ── Keep civicEngageTowns alias for source filter label ────────────────────────
+  const civicEngageTowns = [...cpMA, ...cpCT, ...cpRI, ...cpNH, ...cpVT, ...cpME];
+  const openGovCities = [...ogMA, ...ogCT, ...ogNH];
 
   // ── Merge incoming results into state ──────────────────────────────────────
   function mergeResults(incoming) {
@@ -503,74 +585,72 @@ export default function App() {
     setShowScopeMenu(false);
 
     try {
-      // ── Single-source searches ──────────────────────────────────────────────
-      if (activeScope === 'commbuys') {
+      if (activeScope === 'ma') {
+        // Massachusetts: COMMBUYS statewide first, then all MA cities in parallel
         mergeResults(await fetchCOMMBUYS());
+        await runStateSearch('Massachusetts cities', [
+          fetchBoston(), fetchWatertown(), fetchSomerville(),
+          ...fetchAllOG(ogMA),
+          ...fetchAllCP(cpMA),
+          ...fetchAllCR(cityRunMA),
+        ]);
 
-      } else if (activeScope === 'ctsource') {
+      } else if (activeScope === 'ct') {
+        // Connecticut: CTSource statewide first, then CT cities in parallel
         mergeResults(await fetchCTSource());
+        await runStateSearch('Connecticut cities', [
+          ...fetchAllOG(ogCT),
+          ...fetchAllCP(cpCT),
+          ...fetchAllCR(cityRunCT),
+        ]);
 
-      } else if (activeScope === 'boston') {
-        mergeResults(await fetchBoston());
-
-      } else if (activeScope === 'somerville') {
-        mergeResults(await fetchSomerville());
-
-      } else if (activeScope === 'watertown') {
-        mergeResults(await fetchWatertown());
-
-      } else if (activeScope === 'portsmouth') {
-        mergeResults(await fetchOpenGov('Portsmouth NH', 'cityofportsmouth', 'City of Portsmouth NH'));
-
-      } else if (activeScope === 'providence') {
-        mergeResults(await fetchProvidence());
-
-      } else if (activeScope === 'nhdas') {
-        mergeResults(await fetchNHDAS());
-
-      } else if (activeScope === 'towns') {
-        setLoadingMsg('Searching all CivicEngage towns…');
-        const arrays = await Promise.all(
-          civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency))
-        );
-        mergeResults(arrays.flat());
-
-      } else if (activeScope === 'opengov') {
-        setLoadingMsg('Searching OpenGov cities…');
-        const arrays = await Promise.all(
-          openGovCities.map(([name, sub, agency]) => fetchOpenGov(name, sub, agency))
-        );
-        mergeResults(arrays.flat());
-
-      // ── Search All: COMMBUYS first, then CTSource, then everything in parallel ──
-      } else {
-        // Step 1: COMMBUYS via PDF (server-side)
-        mergeResults(await fetchCOMMBUYS());
-
-        // Step 2: CTSource (CT statewide) — high value, run solo
-        mergeResults(await fetchCTSource());
-
-        // Step 3: Everything else in parallel
-        setLoadingMsg('Searching remaining sources…');
-        const [
-          bostonResults, watertownResults,
-          somervilleResults, providenceResults, nhdasResults,
-          ...restArrays
-        ] = await Promise.all([
-          fetchBoston(),
-          fetchWatertown(),
-          fetchSomerville(),
+      } else if (activeScope === 'ri') {
+        // Rhode Island: Providence + all RI cities in parallel
+        await runStateSearch('Rhode Island', [
           fetchProvidence(),
-          fetchNHDAS(),
-          ...civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency)),
-          ...openGovCities.map(([name, sub, agency]) => fetchOpenGov(name, sub, agency)),
+          ...fetchAllCP(cpRI),
+          ...fetchAllCR(cityRunRI),
         ]);
 
-        mergeResults([
-          ...bostonResults, ...watertownResults,
-          ...somervilleResults, ...providenceResults, ...nhdasResults,
-          ...restArrays.flat(),
+      } else if (activeScope === 'nh') {
+        // New Hampshire: NH DAS statewide first, then NH cities in parallel
+        mergeResults(await fetchNHDAS());
+        await runStateSearch('New Hampshire cities', [
+          ...fetchAllOG(ogNH),
+          ...fetchAllCP(cpNH),
+          ...fetchAllCR(cityRunNH),
         ]);
+
+      } else if (activeScope === 'me') {
+        // Maine: all ME cities in parallel
+        await runStateSearch('Maine', [
+          ...fetchAllCP(cpME),
+          ...fetchAllCR(cityRunME),
+        ]);
+
+      } else if (activeScope === 'vt') {
+        // Vermont: all VT cities in parallel
+        await runStateSearch('Vermont', [
+          ...fetchAllCP(cpVT),
+          ...fetchAllCR(cityRunVT),
+        ]);
+
+      // ── Search All New England: state portals first, then everything in parallel ─
+      } else {
+        // Step 1: State-wide portals (highest signal, run sequentially)
+        mergeResults(await fetchCOMMBUYS());
+        mergeResults(await fetchCTSource());
+
+        // Step 2: All cities across all states in parallel
+        setLoadingMsg('Searching all cities & towns…');
+        const results = await Promise.all([
+          fetchBoston(), fetchWatertown(), fetchSomerville(),
+          fetchProvidence(), fetchNHDAS(),
+          ...fetchAllOG([...ogMA, ...ogCT, ...ogNH]),
+          ...fetchAllCP([...cpMA, ...cpCT, ...cpRI, ...cpNH, ...cpVT, ...cpME]),
+          ...fetchAllCR([...cityRunMA, ...cityRunCT, ...cityRunRI, ...cityRunNH, ...cityRunME, ...cityRunVT]),
+        ]);
+        mergeResults(results.flat());
       }
 
       setLastSearched(new Date().toISOString());
@@ -636,33 +716,25 @@ export default function App() {
               style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer', borderLeft:'none' }}
             >
               {loading ? (loadingMsg || 'Searching…') : (
-                searchScope === 'all'        ? 'Search All' :
-                searchScope === 'commbuys'   ? 'Search COMMBUYS' :
-                searchScope === 'ctsource'   ? 'Search CTSource' :
-                searchScope === 'boston'     ? 'Search Boston' :
-                searchScope === 'somerville' ? 'Search Somerville' :
-                searchScope === 'watertown'  ? 'Search Watertown' :
-                searchScope === 'portsmouth' ? 'Search Portsmouth' :
-                searchScope === 'providence' ? 'Search Providence' :
-                searchScope === 'nhdas'      ? 'Search NH State' :
-                searchScope === 'opengov'    ? 'Search OpenGov Cities' :
-                searchScope === 'towns'      ? 'Search Towns' : 'Search'
+                searchScope === 'all' ? 'Search All New England' :
+                searchScope === 'ma'  ? 'Search Massachusetts' :
+                searchScope === 'ct'  ? 'Search Connecticut' :
+                searchScope === 'ri'  ? 'Search Rhode Island' :
+                searchScope === 'nh'  ? 'Search New Hampshire' :
+                searchScope === 'me'  ? 'Search Maine' :
+                searchScope === 'vt'  ? 'Search Vermont' : 'Search'
               )}
             </button>
             {showScopeMenu && !loading && (
               <div style={{ position:'absolute', top:'100%', right:0, zIndex:100, background:'#fff', border:`1px solid ${BRAND.border}`, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', minWidth:220, marginTop:4 }}>
                 {[
-                  ['all',        'Search All Sources'],
-                  ['commbuys',   'COMMBUYS (MA statewide)'],
-                  ['ctsource',   'CTSource (CT statewide)'],
-                  ['boston',     'City of Boston'],
-                  ['somerville', 'Somerville MA'],
-                  ['watertown',  'Watertown MA'],
-                  ['portsmouth', 'Portsmouth NH'],
-                  ['providence', 'Providence RI'],
-                  ['nhdas',      'NH State Procurement'],
-                  ['opengov',    'OpenGov Cities'],
-                  ['towns',      'All Towns'],
+                  ['all', 'All New England'],
+                  ['ma',  'Massachusetts'],
+                  ['ct',  'Connecticut'],
+                  ['ri',  'Rhode Island'],
+                  ['nh',  'New Hampshire'],
+                  ['me',  'Maine'],
+                  ['vt',  'Vermont'],
                 ].map(([key, label]) => (
                   <div
                     key={key}
@@ -830,9 +902,127 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v27</span>
-        <span style={{ fontSize:10, color:BRAND.muted }}>44 towns · Boston · COMMBUYS · CTSource · OpenGov cities · NH · Providence</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v28</span>
+        <button onClick={() => setShowSources(v=>!v)} style={{ fontSize:10, color:BRAND.primary, background:'none', border:'none', cursor:'pointer', padding:0, textDecoration:'underline' }}>
+          Sources &amp; Keywords
+        </button>
       </div>
+
+      {/* Sources Modal */}
+      {showSources && (
+        <div onClick={() => setShowSources(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:'#fff', width:720, maxWidth:'92vw', maxHeight:'82vh', overflowY:'auto', padding:'28px 32px', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+              <div style={{ fontSize:14, fontWeight:600, letterSpacing:0.3 }}>Sources &amp; Keywords</div>
+              <button onClick={() => setShowSources(false)} style={{ background:'none', border:'none', fontSize:18, cursor:'pointer', color:BRAND.muted }}>✕</button>
+            </div>
+
+            {/* Keywords */}
+            <div style={{ marginBottom:20, padding:'12px 16px', background:BRAND.bg, borderLeft:`3px solid ${BRAND.primary}` }}>
+              <div style={{ fontSize:11, fontWeight:600, color:BRAND.muted, letterSpacing:0.5, marginBottom:6 }}>SEARCH KEYWORDS</div>
+              <div style={{ fontSize:12, color:BRAND.text, lineHeight:1.7 }}>
+                landscape architect · landscape architecture · landscape design · landscape services · landscape planning · landscape improvement · design services · professional services · site design · site planning · site improvement · park design · park improvement · park master plan · open space · greenway · trail design · waterfront · streetscape · urban design · public realm · civic design · plaza design · master plan · planting design · playground design · recreation design
+              </div>
+            </div>
+
+            {[
+              { state: 'Massachusetts', sources: [
+                { name: 'COMMBUYS (MA State)',       url: 'https://www.commbuys.com/',                                        type: 'State Portal' },
+                { name: 'City of Boston',            url: 'https://www.boston.gov/bid-listings',                             type: 'City' },
+                { name: 'City of Cambridge',         url: 'https://procurement.opengov.com/portal/cambridgema',              type: 'OpenGov' },
+                { name: 'City of Fall River',        url: 'https://procurement.opengov.com/portal/fallriverma',              type: 'OpenGov' },
+                { name: 'Town of Watertown',         url: 'https://www.watertown-ma.gov/bids',                               type: 'City' },
+                { name: 'City of Somerville',        url: 'https://www.somervillema.gov/departments/finance/procurement-and-contracting-services', type: 'City' },
+                { name: 'City of Worcester',         url: 'https://www.worcesterma.gov/finance/purchasing-bids/bids/open-bids', type: 'City' },
+                { name: 'City of Springfield',       url: 'https://www.springfield-ma.gov/finance/procurement-bids/',        type: 'City' },
+                { name: 'City of Quincy',            url: 'https://www.quincyma.gov/departments/purchasing/current_bids.php', type: 'City' },
+                { name: 'City of Lynn',              url: 'https://www.lynnma.gov/city_government/departments/purchasing/public_notices', type: 'City' },
+                { name: 'City of Lowell',            url: 'https://www.lowellma.gov/Bids.aspx',                             type: 'CivicPlus' },
+                { name: 'Town of Chelmsford',        url: 'https://www.chelmsfordma.gov/Bids.aspx',                         type: 'CivicPlus' },
+                { name: 'Town of Tewksbury',         url: 'https://www.tewksbury-ma.gov/Bids.aspx',                         type: 'CivicPlus' },
+                { name: 'Town of Falmouth',          url: 'https://www.falmouthma.gov/Bids.aspx',                           type: 'CivicPlus' },
+                { name: 'Town of Chatham',           url: 'https://www.chatham-ma.gov/Bids.aspx',                           type: 'CivicPlus' },
+                { name: 'Town of Lexington',         url: 'https://www.lexingtonma.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Concord',           url: 'https://www.concordma.gov/Bids.aspx',                            type: 'CivicPlus' },
+                { name: 'Town of Needham',           url: 'https://www.needhamma.gov/Bids.aspx',                            type: 'CivicPlus' },
+                { name: 'City of Gloucester',        url: 'https://www.gloucester-ma.gov/Bids.aspx',                        type: 'CivicPlus' },
+                { name: 'City of Salem',             url: 'https://www.salemma.gov/Bids.aspx',                             type: 'CivicPlus' },
+                { name: 'City of Newburyport',       url: 'https://www.cityofnewburyport.com/Bids.aspx',                   type: 'CivicPlus' },
+                { name: 'Town of Marblehead',        url: 'https://www.marblehead.org/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Hingham',           url: 'https://www.hingham-ma.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Cohasset',          url: 'https://www.cohassetma.org/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Duxbury',           url: 'https://www.town.duxbury.ma.us/Bids.aspx',                      type: 'CivicPlus' },
+                { name: 'Town of Scituate',          url: 'https://www.scituatema.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Brookline',         url: 'https://www.brooklinema.gov/Bids.aspx',                         type: 'CivicPlus' },
+                { name: 'Town of Belmont',           url: 'https://www.belmont-ma.gov/bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Milton',            url: 'https://www.miltonma.gov/bids.aspx',                            type: 'CivicPlus' },
+                { name: 'Town of Wellesley',         url: 'https://www.wellesleyma.gov/Bids.aspx',                         type: 'CivicPlus' },
+                { name: 'Town of Weston',            url: 'https://www.weston.org/bids.aspx',                              type: 'CivicPlus' },
+                { name: 'City of Beverly',           url: 'https://www.beverlyma.gov/Bids.aspx',                           type: 'CivicPlus' },
+                { name: 'Town of Ipswich',           url: 'https://www.ipswichma.gov/Bids.aspx',                           type: 'CivicPlus' },
+                { name: 'Town of Rockport',          url: 'https://www.rockportma.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Wenham',            url: 'https://www.wenhamma.gov/bids.aspx',                            type: 'CivicPlus' },
+                { name: 'Town of Yarmouth',          url: 'https://www.yarmouth.ma.us/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Orleans',           url: 'https://www.town.orleans.ma.us/Bids.aspx',                      type: 'CivicPlus' },
+                { name: 'Town of Winchester',        url: 'https://www.winchester-ma.gov/bids.aspx',                       type: 'CivicPlus' },
+                { name: 'Town of Hanover',           url: 'https://www.hanover-ma.gov/bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Norwell',           url: 'https://www.norwell.ma.us/bids.aspx',                           type: 'CivicPlus' },
+              ]},
+              { state: 'Connecticut', sources: [
+                { name: 'CTSource (CT State)',       url: 'https://portal.ct.gov/das/ctsource/bidboard',                    type: 'State Portal' },
+                { name: 'City of New Haven',         url: 'https://procurement.opengov.com/portal/newhavenct',             type: 'OpenGov' },
+                { name: 'City of Bridgeport',        url: 'https://procurement.opengov.com/portal/bridgeportct',           type: 'OpenGov' },
+                { name: 'City of New Britain',       url: 'https://www.newbritainct.gov/services/purchasing/bidshtm',      type: 'City' },
+                { name: 'City of Norwalk',           url: 'https://www.norwalkct.gov/bids.aspx',                           type: 'CivicPlus' },
+                { name: 'City of Danbury',           url: 'https://www.danbury-ct.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Madison',           url: 'https://www.madisonct.org/bids.aspx',                           type: 'CivicPlus' },
+                { name: 'Town of Enfield',           url: 'https://www.enfield-ct.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'Town of Granby',            url: 'https://www.granby-ct.gov/Bids.aspx',                           type: 'CivicPlus' },
+                { name: 'Town of Wolcott',           url: 'https://www.wolcottct.org/Bids.aspx',                           type: 'CivicPlus' },
+              ]},
+              { state: 'Rhode Island', sources: [
+                { name: 'City of Providence',        url: 'https://www.providenceri.gov/purchasing/openrfpsummary/',       type: 'City' },
+                { name: 'City of Warwick',           url: 'https://www.warwickri.gov/bids',                                type: 'CivicPlus' },
+                { name: 'City of Pawtucket',         url: 'https://pawtucketri.gov/purchasing-department/current-bids/',  type: 'City' },
+                { name: 'City of East Providence',   url: 'https://eastprovidenceri.gov/rfp',                             type: 'City' },
+              ]},
+              { state: 'New Hampshire', sources: [
+                { name: 'NH State Procurement',      url: 'https://apps.das.nh.gov/NHProcurement/Bid',                    type: 'State Portal' },
+                { name: 'City of Portsmouth',        url: 'https://procurement.opengov.com/portal/cityofportsmouth',      type: 'OpenGov' },
+                { name: 'City of Concord',           url: 'https://www.concordnh.gov/Bids.aspx',                          type: 'CivicPlus' },
+                { name: 'City of Rochester',         url: 'https://www.rochesternh.gov/bids',                             type: 'CivicPlus' },
+                { name: 'City of Manchester',        url: 'https://www.manchesternh.gov/Departments/Purchasing/Bid-Opportunities-and-Results', type: 'City' },
+              ]},
+              { state: 'Maine', sources: [
+                { name: 'City of Portland',          url: 'https://www.portlandmaine.gov/1210/Current-BidsRFPs',          type: 'CivicPlus' },
+                { name: 'City of Lewiston',          url: 'https://www.ci.lewiston.me.us/Bids.aspx',                      type: 'CivicPlus' },
+                { name: 'City of Bangor',            url: 'https://www.bangormaine.gov/Bids.aspx',                        type: 'CivicPlus' },
+                { name: 'City of South Portland',    url: 'https://www.southportland.gov/Bids.aspx',                      type: 'CivicPlus' },
+                { name: 'City of Auburn',            url: 'https://www.auburnmaine.gov/departments/finance/bids/index.php', type: 'City' },
+                { name: 'City of Augusta',           url: 'https://www.augustamaine.gov/index.php?docid=4618&section=purchasing', type: 'City' },
+              ]},
+              { state: 'Vermont', sources: [
+                { name: 'City of Burlington',        url: 'https://www.burlingtonvt.gov/Bids.aspx',                       type: 'CivicPlus' },
+                { name: 'City of South Burlington',  url: 'https://www.southburlingtonvt.gov/bids.aspx',                  type: 'CivicPlus' },
+                { name: 'City of Montpelier',        url: 'https://www.montpelier-vt.org/Bids.aspx',                      type: 'CivicPlus' },
+                { name: 'City of Rutland',           url: 'https://www.rutlandcity.org/departments/clerks-office/bids-requests-for-proposals-rfps/', type: 'City' },
+              ]},
+            ].map(({ state, sources }) => (
+              <div key={state} style={{ marginBottom:18 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:BRAND.secondary, letterSpacing:0.8, textTransform:'uppercase', marginBottom:6, paddingBottom:4, borderBottom:`1px solid ${BRAND.border}` }}>{state} — {sources.length} sources</div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 0' }}>
+                  {sources.map(s => (
+                    <div key={s.url} style={{ width:'50%', display:'flex', alignItems:'baseline', gap:6, paddingRight:8 }}>
+                      <span style={{ fontSize:9, padding:'1px 4px', background: s.type==='State Portal'?'#dbeafe': s.type==='OpenGov'?'#dcfce7': s.type==='CivicPlus'?'#fef9c3':'#f3f4f6', color:BRAND.secondary, borderRadius:2, whiteSpace:'nowrap', flexShrink:0 }}>{s.type}</span>
+                      <a href={s.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:11, color:BRAND.primary, textDecoration:'none' }}>{s.name}</a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
