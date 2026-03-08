@@ -87,9 +87,13 @@ app.get('/api/commbuys-pdf', async (req, res) => {
         const mod = targetUrl.startsWith('https') ? https : http;
         const options = {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Accept': 'application/pdf,*/*',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/pdf,application/x-pdf,*/*;q=0.9',
+            'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'identity',
+            'Referer': 'https://www.mass.gov/',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
           },
           timeout: 20000,
         };
