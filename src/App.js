@@ -76,7 +76,7 @@ const COMMBUYS_SEARCH_TERMS = [
   'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v19';
+const STORAGE_KEY = 'ljla_v20';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -92,6 +92,8 @@ export default function App() {
   const [expandedId, setExpandedId]       = useState(null);
   const [showAddManual, setShowAddManual] = useState(false);
   const [manualForm, setManualForm]       = useState({ title:'', agency:'', deadline:'', link:'', notes:'' });
+  const [searchScope, setSearchScope]     = useState('all');
+  const [showScopeMenu, setShowScopeMenu] = useState(false);
 
   // ── Persist ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -460,89 +462,128 @@ export default function App() {
   }
 
   // ── Run search ─────────────────────────────────────────────────────────────────
-  const runSearch = useCallback(async () => {
+  const civicEngageTowns = [
+    ['Falmouth MA',    'https://www.falmouthma.gov/Bids.aspx',           'Town of Falmouth'],
+    ['Chatham MA',     'https://www.chatham-ma.gov/Bids.aspx',           'Town of Chatham'],
+    ['Lexington MA',   'https://www.lexingtonma.gov/Bids.aspx',          'Town of Lexington'],
+    ['Concord MA',     'https://www.concordma.gov/Bids.aspx',            'Town of Concord'],
+    ['Needham MA',     'https://www.needhamma.gov/Bids.aspx',            'Town of Needham'],
+    ['Gloucester MA',  'https://www.gloucester-ma.gov/Bids.aspx',        'City of Gloucester'],
+    ['Salem MA',       'https://www.salemma.gov/Bids.aspx',              'City of Salem'],
+    ['Newburyport MA', 'https://www.cityofnewburyport.com/Bids.aspx',    'City of Newburyport'],
+    ['Marblehead MA',  'https://www.marblehead.org/Bids.aspx',           'Town of Marblehead'],
+    ['Hingham MA',     'https://www.hingham-ma.gov/Bids.aspx',           'Town of Hingham'],
+    ['Cohasset MA',    'https://www.cohassetma.org/Bids.aspx',           'Town of Cohasset'],
+    ['Duxbury MA',     'https://www.town.duxbury.ma.us/Bids.aspx',       'Town of Duxbury'],
+    ['Scituate MA',    'https://www.scituatema.gov/Bids.aspx',           'Town of Scituate'],
+    ['Brookline MA',   'https://www.brooklinema.gov/Bids.aspx',          'Town of Brookline'],
+    ['Belmont MA',     'https://www.belmont-ma.gov/bids.aspx',           'Town of Belmont'],
+    ['Milton MA',      'https://www.miltonma.gov/bids.aspx',             'Town of Milton'],
+    ['Wellesley MA',   'https://www.wellesleyma.gov/Bids.aspx',          'Town of Wellesley'],
+    ['Weston MA',      'https://www.weston.org/bids.aspx',               'Town of Weston'],
+    ['Beverly MA',     'https://www.beverlyma.gov/Bids.aspx',            'City of Beverly'],
+    ['Ipswich MA',     'https://www.ipswichma.gov/Bids.aspx',            'Town of Ipswich'],
+    ['Rockport MA',    'https://www.rockportma.gov/Bids.aspx',           'Town of Rockport'],
+    ['Wenham MA',      'https://www.wenhamma.gov/bids.aspx',             'Town of Wenham'],
+    ['Yarmouth MA',    'https://www.yarmouth.ma.us/Bids.aspx',           'Town of Yarmouth'],
+    ['Orleans MA',     'https://www.town.orleans.ma.us/Bids.aspx',       'Town of Orleans'],
+    ['Madison CT',     'https://www.madisonct.org/bids.aspx',            'Town of Madison CT'],
+    ['Winchester MA',  'https://www.winchester-ma.gov/bids.aspx',        'Town of Winchester'],
+    ['Hanover MA',     'https://www.hanover-ma.gov/bids.aspx',           'Town of Hanover'],
+    ['Norwell MA',     'https://www.norwell.ma.us/bids.aspx',            'Town of Norwell'],
+  ];
+
+  // ── Merge incoming results into state ──────────────────────────────────────
+  function mergeResults(incoming) {
+    setResults(prev => {
+      const manuals = prev.filter(r => r.source === 'Manual');
+      const existingIds = new Set(prev.map(r => r.id));
+      const fresh = incoming.filter(r => !existingIds.has(r.id));
+      const updated = prev.filter(r => r.source !== 'Manual').map(r => {
+        const match = incoming.find(n => n.id === r.id);
+        return match ? { ...match, description: r.description || match.description } : r;
+      });
+      return [...manuals, ...updated, ...fresh];
+    });
+  }
+
+  const runSearch = useCallback(async (scope) => {
+    const activeScope = scope || searchScope;
     setLoading(true);
     setError(null);
-
-    const civicEngageTowns = [
-      // ── Currently in production ──
-      ['Falmouth MA',      'https://www.falmouthma.gov/Bids.aspx',           'Town of Falmouth'],
-      ['Chatham MA',       'https://www.chatham-ma.gov/Bids.aspx',            'Town of Chatham'],
-      ['Lexington MA',     'https://www.lexingtonma.gov/Bids.aspx',           'Town of Lexington'],
-      ['Concord MA',       'https://www.concordma.gov/Bids.aspx',             'Town of Concord'],
-      ['Needham MA',       'https://www.needhamma.gov/Bids.aspx',             'Town of Needham'],
-      ['Gloucester MA',    'https://www.gloucester-ma.gov/Bids.aspx',         'City of Gloucester'],
-      ['Salem MA',         'https://www.salemma.gov/Bids.aspx',               'City of Salem'],
-      ['Newburyport MA',   'https://www.cityofnewburyport.com/Bids.aspx',     'City of Newburyport'],
-      ['Marblehead MA',    'https://www.marblehead.org/Bids.aspx',            'Town of Marblehead'],
-      ['Hingham MA',       'https://www.hingham-ma.gov/Bids.aspx',            'Town of Hingham'],
-      ['Cohasset MA',      'https://www.cohassetma.org/Bids.aspx',            'Town of Cohasset'],
-      ['Duxbury MA',       'https://www.town.duxbury.ma.us/Bids.aspx',        'Town of Duxbury'],
-      ['Scituate MA',      'https://www.scituatema.gov/Bids.aspx',            'Town of Scituate'],
-      // ── New additions ──
-      ['Brookline MA',     'https://www.brooklinema.gov/Bids.aspx',           'Town of Brookline'],
-      ['Belmont MA',       'https://www.belmont-ma.gov/bids.aspx',            'Town of Belmont'],
-      ['Milton MA',        'https://www.miltonma.gov/bids.aspx',              'Town of Milton'],
-      ['Wellesley MA',     'https://www.wellesleyma.gov/Bids.aspx',           'Town of Wellesley'],
-      ['Weston MA',        'https://www.weston.org/bids.aspx',                'Town of Weston'],
-      ['Beverly MA',       'https://www.beverlyma.gov/Bids.aspx',             'City of Beverly'],
-      ['Ipswich MA',       'https://www.ipswichma.gov/Bids.aspx',             'Town of Ipswich'],
-      ['Rockport MA',      'https://www.rockportma.gov/Bids.aspx',            'Town of Rockport'],
-      ['Wenham MA',        'https://www.wenhamma.gov/bids.aspx',              'Town of Wenham'],
-      ['Yarmouth MA',      'https://www.yarmouth.ma.us/Bids.aspx',            'Town of Yarmouth'],
-      ['Orleans MA',       'https://www.town.orleans.ma.us/Bids.aspx',        'Town of Orleans'],
-      ['Madison CT',       'https://www.madisonct.org/bids.aspx',             'Town of Madison CT'],
-      ['Winchester MA',    'https://www.winchester-ma.gov/bids.aspx',         'Town of Winchester'],
-      ['Hanover MA',       'https://www.hanover-ma.gov/bids.aspx',            'Town of Hanover'],
-      ['Norwell MA',       'https://www.norwell.ma.us/bids.aspx',             'Town of Norwell'],
-    ];
+    setShowScopeMenu(false);
 
     try {
-      setLoadingMsg('Searching all sources in parallel…');
-      const [
-        samResults,
-        bostonResults,
-        commbuysResults,
-        watertownResults,
-        portsmouthResults,
-        somervilleResults,
-        providenceResults,
-        nhdasResults,
-        ...civicArrays
-      ] = await Promise.all([
-        apiKey ? fetchSAM(apiKey) : Promise.resolve([]),
-        fetchBoston(),
-        fetchCOMMBUYS(),
-        fetchWatertown(),
-        fetchPortsmouth(),
-        fetchSomerville(),
-        fetchProvidence(),
-        fetchNHDAS(),
-        ...civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency)),
-      ]);
+      // ── Single-source searches ──────────────────────────────────────────────
+      if (activeScope === 'commbuys') {
+        const results = await fetchCOMMBUYS();
+        mergeResults(results);
 
-      const incoming = [
-        ...samResults,
-        ...bostonResults,
-        ...commbuysResults,
-        ...watertownResults,
-        ...portsmouthResults,
-        ...somervilleResults,
-        ...providenceResults,
-        ...nhdasResults,
-        ...civicArrays.flat(),
-      ];
+      } else if (activeScope === 'boston') {
+        const results = await fetchBoston();
+        mergeResults(results);
 
-      setResults(prev => {
-        const manuals = prev.filter(r => r.source === 'Manual');
-        const existingIds = new Set(prev.map(r => r.id));
-        const fresh = incoming.filter(r => !existingIds.has(r.id));
-        const updated = prev.filter(r => r.source !== 'Manual').map(r => {
-          const match = incoming.find(n => n.id === r.id);
-          return match ? { ...match, description: r.description || match.description } : r;
-        });
-        return [...manuals, ...updated, ...fresh];
-      });
+      } else if (activeScope === 'somerville') {
+        const results = await fetchSomerville();
+        mergeResults(results);
+
+      } else if (activeScope === 'watertown') {
+        const results = await fetchWatertown();
+        mergeResults(results);
+
+      } else if (activeScope === 'portsmouth') {
+        const results = await fetchPortsmouth();
+        mergeResults(results);
+
+      } else if (activeScope === 'providence') {
+        const results = await fetchProvidence();
+        mergeResults(results);
+
+      } else if (activeScope === 'nhdas') {
+        const results = await fetchNHDAS();
+        mergeResults(results);
+
+      } else if (activeScope === 'towns') {
+        setLoadingMsg('Searching all CivicEngage towns…');
+        const arrays = await Promise.all(
+          civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency))
+        );
+        mergeResults(arrays.flat());
+
+      } else if (activeScope === 'sam') {
+        if (!apiKey) { setError('SAM.gov requires an API key — click SAM Key to add it.'); return; }
+        const results = await fetchSAM(apiKey);
+        mergeResults(results);
+
+      // ── Search All: COMMBUYS first, then everything else in parallel ────────
+      } else {
+        // Step 1: COMMBUYS first, alone, so it gets full proxy bandwidth
+        const commbuysResults = await fetchCOMMBUYS();
+        mergeResults(commbuysResults);
+
+        // Step 2: All other sources in parallel
+        setLoadingMsg('Searching remaining sources…');
+        const [
+          samResults, bostonResults, watertownResults,
+          portsmouthResults, somervilleResults, providenceResults,
+          nhdasResults, ...civicArrays
+        ] = await Promise.all([
+          apiKey ? fetchSAM(apiKey) : Promise.resolve([]),
+          fetchBoston(),
+          fetchWatertown(),
+          fetchPortsmouth(),
+          fetchSomerville(),
+          fetchProvidence(),
+          fetchNHDAS(),
+          ...civicEngageTowns.map(([name, url, agency]) => fetchCivicEngage(name, url, agency)),
+        ]);
+
+        mergeResults([
+          ...samResults, ...bostonResults, ...watertownResults,
+          ...portsmouthResults, ...somervilleResults, ...providenceResults,
+          ...nhdasResults, ...civicArrays.flat(),
+        ]);
+      }
 
       setLastSearched(new Date().toISOString());
     } catch(e) {
@@ -552,7 +593,7 @@ export default function App() {
       setLoadingMsg('');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey]);
+  }, [apiKey, searchScope]);
 
   // ── Filter & sort ──────────────────────────────────────────────────────────────
   const sources = ['All', ...new Set(results.map(r => r.source))].sort((a,b) => a==='All'?-1:a.localeCompare(b));
@@ -594,10 +635,60 @@ export default function App() {
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
           <button onClick={() => setShowApiKey(v=>!v)} style={btnGhost}>SAM Key</button>
           <button onClick={() => setShowAddManual(v=>!v)} style={btnGhost}>+ Add</button>
-          <button onClick={runSearch} disabled={loading}
-            style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer' }}>
-            {loading ? 'Searching…' : 'Search'}
-          </button>
+
+          {/* Split search button */}
+          <div style={{ position:'relative', display:'flex' }}>
+            {/* Dropdown arrow */}
+            <button
+              disabled={loading}
+              onClick={() => setShowScopeMenu(v => !v)}
+              style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer', padding:'7px 10px', borderRight:'1px solid rgba(255,255,255,0.25)' }}
+            >▾</button>
+            {/* Main search button */}
+            <button
+              disabled={loading}
+              onClick={() => runSearch(searchScope)}
+              style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer', borderLeft:'none' }}
+            >
+              {loading ? (loadingMsg || 'Searching…') : (
+                searchScope === 'all' ? 'Search All' :
+                searchScope === 'commbuys' ? 'Search COMMBUYS' :
+                searchScope === 'boston' ? 'Search Boston' :
+                searchScope === 'somerville' ? 'Search Somerville' :
+                searchScope === 'watertown' ? 'Search Watertown' :
+                searchScope === 'portsmouth' ? 'Search Portsmouth' :
+                searchScope === 'providence' ? 'Search Providence' :
+                searchScope === 'nhdas' ? 'Search NH State' :
+                searchScope === 'sam' ? 'Search SAM.gov' :
+                searchScope === 'towns' ? 'Search Towns' : 'Search'
+              )}
+            </button>
+            {/* Dropdown menu */}
+            {showScopeMenu && !loading && (
+              <div style={{ position:'absolute', top:'100%', right:0, zIndex:100, background:'#fff', border:`1px solid ${BRAND.border}`, boxShadow:'0 4px 16px rgba(0,0,0,0.1)', minWidth:200, marginTop:4 }}>
+                {[
+                  ['all',        'Search All Sources'],
+                  ['commbuys',   'COMMBUYS (MA statewide)'],
+                  ['boston',     'City of Boston'],
+                  ['somerville', 'Somerville MA'],
+                  ['watertown',  'Watertown MA'],
+                  ['portsmouth', 'Portsmouth NH'],
+                  ['providence', 'Providence RI'],
+                  ['nhdas',      'NH State Procurement'],
+                  ['towns',      'All Towns'],
+                  ['sam',        'SAM.gov'],
+                ].map(([key, label]) => (
+                  <div
+                    key={key}
+                    onClick={() => { setSearchScope(key); setShowScopeMenu(false); }}
+                    style={{ padding:'10px 16px', fontSize:12, cursor:'pointer', fontWeight: searchScope===key ? 600 : 400, color: searchScope===key ? BRAND.primary : BRAND.text, background: searchScope===key ? BRAND.bg : '#fff', borderBottom:`1px solid ${BRAND.border}` }}
+                    onMouseEnter={e => e.currentTarget.style.background = BRAND.bg}
+                    onMouseLeave={e => e.currentTarget.style.background = searchScope===key ? BRAND.bg : '#fff'}
+                  >{label}</div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -769,7 +860,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v19</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v20</span>
         <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
       </div>
     </div>
