@@ -203,6 +203,52 @@ app.get('/api/commbuys-debug', async (req, res) => {
   } catch(e) { res.status(502).json({ error: e.message }); }
 });
 
+
+// COMMBUYS PDF endpoint — parses mass.gov "New Bids Available" PDF
+app.get('/api/commbuys-pdf', async (req, res) => {
+  const PDF_URL = 'https://www.mass.gov/doc/commbuys-home-page-bid-count/download';
+  const KEYWORDS = ['landscape architecture', 'landscape design', 'design services', 'park'];
+  try {
+    // Fetch PDF as binary
+    const pdfBuf = await new Promise((resolve, reject) => {
+      https.get(PDF_URL, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/pdf,*/*' } }, (r) => {
+        const chunks = [];
+        r.on('data', c => chunks.push(c));
+        r.on('end', () => resolve(Buffer.concat(chunks)));
+        r.on('error', reject);
+      }).on('error', reject);
+    });
+
+    const pdfParse = require('pdf-parse');
+    const data = await pdfParse(pdfBuf);
+    const text = data.text;
+
+    // Each row looks like: OrgID  OrgName  Date  Time  Description  BidNumber
+    // Split into lines and parse BD- entries
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const bids = [];
+    for (const line of lines) {
+      const bidMatch = line.match(/(BD-[\w-]+)/);
+      if (!bidMatch) continue;
+      const bidNum = bidMatch[1];
+      const lower = line.toLowerCase();
+      if (!KEYWORDS.some(kw => lower.includes(kw))) continue;
+      // Extract description — everything between date/time and bid number
+      const desc = line.replace(/(BD-[\w-]+)/, '').replace(/\d{1,2}\/\d{1,2}\/\d{4}/, '').replace(/\d{1,2}:\d{2}\s*(AM|PM)/i, '').replace(/^\d+\s+/, '').trim();
+      bids.push({
+        bidNum,
+        desc: desc || bidNum,
+        link: `https://www.commbuys.com/bso/external/bidDetail.sda?docId=${bidNum}&external=true&parentUrl=close`,
+      });
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ count: bids.length, bids, pages: data.numpages });
+  } catch(e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(express.static(path.join(__dirname, 'build')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
