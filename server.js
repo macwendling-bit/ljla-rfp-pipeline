@@ -172,6 +172,37 @@ app.get('/api/commbuys-all', async (req, res) => {
   }
 });
 
+
+// DEBUG: show raw page-2 POST response so we can inspect it
+app.get('/api/commbuys-debug', async (req, res) => {
+  const BASE = 'https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml';
+  try {
+    const step1 = await httpsReq(BASE + '?openBids=true', 'GET', {}, null);
+    const cookieStr = step1.cookies.map(c => c.split(';')[0]).join('; ');
+    const vsMatch = step1.body.match(/javax\.faces\.ViewState[^>]*value="([^"]+)"/);
+    if (!vsMatch) return res.json({ error: 'no ViewState', snippet: step1.body.slice(0, 300) });
+    const viewState = vsMatch[1];
+    const NEXT_BTN = 'bidSearchResultsForm:bidResultId:j_idt419';
+    const formData = new URLSearchParams({
+      'bidSearchResultsForm': 'bidSearchResultsForm',
+      'javax.faces.ViewState': viewState,
+      'javax.faces.partial.ajax': 'true',
+      'javax.faces.source': NEXT_BTN,
+      'javax.faces.partial.execute': NEXT_BTN,
+      'javax.faces.partial.render': 'bidSearchResultsForm:bidResultId',
+      [NEXT_BTN]: NEXT_BTN,
+    }).toString();
+    const step2 = await httpsReq(BASE, 'POST', {
+      'Cookie': cookieStr, 'Referer': BASE + '?openBids=true',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://www.commbuys.com',
+      'X-Requested-With': 'XMLHttpRequest', 'Faces-Request': 'partial/ajax',
+    }, formData);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ status: step2.status, bodyLength: step2.body.length, first500: step2.body.slice(0, 500), last300: step2.body.slice(-300), hasBD: step2.body.includes('BD-'), cookies: step2.cookies.length });
+  } catch(e) { res.status(502).json({ error: e.message }); }
+});
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(express.static(path.join(__dirname, 'build')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
