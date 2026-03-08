@@ -82,7 +82,7 @@ app.get('/api/commbuys-all', async (req, res) => {
 
   try {
     // Step 1: GET initial page — establish session + get ViewState
-    const step1 = await httpsReq(BASE + '?openBids=true', 'GET', {}, null);
+    const step1 = await httpsReq(BASE + '?openBids=true&pageSize=25', 'GET', {}, null);
     let cookieStr = step1.cookies.map(c => c.split(';')[0]).join('; ');
 
     // Extract ViewState
@@ -123,14 +123,16 @@ app.get('/api/commbuys-all', async (req, res) => {
 
     // Step 2: paginate via JSF partial POST
     for (let page = 2; page <= MAX_PAGES; page++) {
+      // j_idt419 = "Next page" button in bidSearchResultsForm
+      const NEXT_BTN = 'bidSearchResultsForm:bidResultId:j_idt419';
       const formData = new URLSearchParams({
-        'searchForm': 'searchForm',
-        'searchForm:j_idt118': String(page),
+        'bidSearchResultsForm': 'bidSearchResultsForm',
         'javax.faces.ViewState': viewState,
         'javax.faces.partial.ajax': 'true',
-        'javax.faces.source': 'searchForm:j_idt118',
-        'javax.faces.partial.execute': '@all',
-        'javax.faces.partial.render': 'searchForm',
+        'javax.faces.source': NEXT_BTN,
+        'javax.faces.partial.execute': NEXT_BTN,
+        'javax.faces.partial.render': 'bidSearchResultsForm:bidResultId',
+        [NEXT_BTN]: NEXT_BTN,
       }).toString();
 
       const step = await httpsReq(BASE, 'POST', {
