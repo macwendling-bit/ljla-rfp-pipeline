@@ -76,7 +76,7 @@ const COMMBUYS_SEARCH_TERMS = [
   'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v17';
+const STORAGE_KEY = 'ljla_v18';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -200,69 +200,57 @@ export default function App() {
   }
 
   // ── COMMBUYS (MA statewide) ────────────────────────────────────────────────────
-  // Uses keyword search URL for each term — far more targeted than generic open-bids listing.
-  // Each search term fetches pages 1–2 (up to 50 results). Deduped by bid number.
+  // Uses openBids=true listing (simple GET, works via proxy).
+  // Fetches 8 pages = 200 bids, filters by isRelevant().
+  // Column layout confirmed from live DOM:
+  //   cells[0]: Bid # (link), cells[2]: Org Name,
+  //   cells[6]: Description,  cells[7]: Bid Opening Date
   async function fetchCOMMBUYS() {
     const allOpps = [];
     const seenIds = new Set();
-
-    function parseCommbuysBidRows(html) {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const rows = doc.querySelectorAll('table tr');
-      const results = [];
-      for (const row of rows) {
-        const cells = row.querySelectorAll('td');
-        if (cells.length < 5) continue;
-        // Actual column layout (verified from live DOM):
-        // Col 0: Bid Solicitation # (link), Col 2: Organization Name,
-        // Col 6: Description, Col 7: Bid Opening Date
-        const bidLink = cells[0]?.querySelector('a');
-        if (!bidLink) continue;
-        const bidNum = bidLink.textContent.trim();
-        if (!bidNum) continue;
-        const href = bidLink.getAttribute('href') || '';
-        const link = href.startsWith('http') ? href : `https://www.commbuys.com${href}`;
-        const orgName = cells[2]?.textContent.trim() || '';
-        const description = cells[6]?.textContent.trim() || '';
-        const dateText = cells[7]?.textContent.trim() || '';
-        results.push({ bidNum, link, orgName, description, dateText });
-      }
-      return results;
-    }
-
-    for (const term of COMMBUYS_SEARCH_TERMS) {
-      setLoadingMsg(`COMMBUYS — searching "${term}"…`);
-      try {
-        for (let page = 1; page <= 2; page++) {
-          // Use dedicated /api/commbuys endpoint which handles JSF session cookie
-          const html = await fetch(`/api/commbuys?q=${encodeURIComponent(term)}&page=${page}`).then(r => r.text());
-          const rows = parseCommbuysBidRows(html);
-          let newOnPage = 0;
-          for (const { bidNum, link, orgName, description, dateText } of rows) {
-            if (seenIds.has(bidNum)) continue;
-            if (!isRelevant(description + ' ' + bidNum)) continue;
-            seenIds.add(bidNum);
-            newOnPage++;
-            allOpps.push({
-              id: `commbuys-${bidNum.replace(/\W+/g, '-')}`,
-              source: 'COMMBUYS',
-              title: description || bidNum,
-              agency: orgName || 'MA Agency',
-              deadline: dateText,
-              link,
-              description: '',
-              bid_number: bidNum,
-              type: /rfp|request for proposal/i.test(description) ? 'RFP'
-                  : /rfq/i.test(description) ? 'RFQ'
-                  : 'Bid',
-            });
-          }
-          // If page 1 returned no rows at all, no point fetching page 2
-          if (page === 1 && rows.length === 0) break;
+    try {
+      for (let page = 1; page <= 8; page++) {
+        setLoadingMsg(`COMMBUYS (MA statewide) — page ${page} of 8…`);
+        const url = `https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true&pageNum=${page}`;
+        const html = await fetchViaProxy(url);
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const rows = doc.querySelectorAll('table tr');
+        let foundOnPage = 0;
+        for (const row of rows) {
+          const cells = row.querySelectorAll('td');
+          if (cells.length < 8) continue;
+          const bidLink = cells[0]?.querySelector('a');
+          if (!bidLink) continue;
+          const bidNum = bidLink.textContent.trim();
+          if (!bidNum) continue;
+          const href = bidLink.getAttribute('href') || '';
+          const link = href.startsWith('http') ? href : `https://www.commbuys.com${href}`;
+          const orgName = cells[2]?.textContent.trim() || '';
+          const description = cells[6]?.textContent.trim() || '';
+          const dateText = cells[7]?.textContent.trim() || '';
+          if (!isRelevant(description + ' ' + bidNum)) continue;
+          if (seenIds.has(bidNum)) continue;
+          seenIds.add(bidNum);
+          foundOnPage++;
+          allOpps.push({
+            id: `commbuys-${bidNum.replace(/\W+/g, '-')}`,
+            source: 'COMMBUYS',
+            title: description || bidNum,
+            agency: orgName || 'MA Agency',
+            deadline: dateText,
+            link,
+            description: '',
+            bid_number: bidNum,
+            type: /rfp|request for proposal/i.test(description) ? 'RFP'
+                : /rfq/i.test(description) ? 'RFQ'
+                : 'Bid',
+          });
         }
-      } catch(e) { console.warn(`COMMBUYS error (term: "${term}"):`, e.message); }
-    }
+        // If a page returns no rows at all, we've hit the end
+        if (rows.length < 3) break;
+      }
+    } catch(e) { console.warn('COMMBUYS error:', e.message); }
     return allOpps;
   }
 
@@ -766,7 +754,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v17</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v18</span>
         <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
       </div>
     </div>
