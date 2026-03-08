@@ -76,7 +76,7 @@ const COMMBUYS_SEARCH_TERMS = [
   'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v22';
+const STORAGE_KEY = 'ljla_v24';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -205,27 +205,43 @@ export default function App() {
   async function fetchCOMMBUYS() {
     const allOpps = [];
     const seenIds = new Set();
-    try {
-      setLoadingMsg('COMMBUYS — loading open bids…');
-      const html = await fetchViaProxy('https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true');
+    const KEYWORDS = ['landscape architecture', 'landscape design', 'design services', 'park'];
+
+    function parseRows(html) {
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      for (const row of doc.querySelectorAll('table tr')) {
-        const cells = row.querySelectorAll('td');
-        if (cells.length < 8) continue;
-        const bidLink = cells[0]?.querySelector('a');
-        if (!bidLink) continue;
-        const bidNum = bidLink.textContent.trim();
-        if (!bidNum || seenIds.has(bidNum)) continue;
-        seenIds.add(bidNum);
-        const href = bidLink.getAttribute('href') || '';
-        const link = href.startsWith('http') ? href : 'https://www.commbuys.com' + href;
-        const description = cells[6]?.textContent.trim() || bidNum;
-        const dateText = cells[7]?.textContent.trim() || '';
-        const orgName = cells[2]?.textContent.trim() || 'MA Agency';
-        allOpps.push({ id:'commbuys-'+bidNum.replace(/\W+/g,'-'), source:'COMMBUYS', title:description, agency:orgName, deadline:dateText, link, description:'', bid_number:bidNum, type:'Bid' });
-      }
-      console.log('COMMBUYS raw results:', allOpps.length);
-    } catch(e) { console.warn('COMMBUYS error:', e.message); }
+      return [...doc.querySelectorAll('table tr')]
+        .filter(r => r.querySelectorAll('td').length >= 8)
+        .map(r => {
+          const cells = r.querySelectorAll('td');
+          const bidLink = cells[0]?.querySelector('a');
+          if (!bidLink) return null;
+          const bidNum = bidLink.textContent.replace('Bid Solicitation #','').trim();
+          if (!bidNum.startsWith('BD-')) return null;
+          const href = bidLink.getAttribute('href') || '';
+          return {
+            bidNum,
+            link: href.startsWith('http') ? href : 'https://www.commbuys.com' + href,
+            org: cells[2]?.textContent.trim() || 'MA Agency',
+            desc: cells[6]?.textContent.replace('Description','').trim() || bidNum,
+            date: cells[7]?.textContent.trim() || '',
+          };
+        }).filter(Boolean);
+    }
+
+    for (const kw of KEYWORDS) {
+      setLoadingMsg('COMMBUYS — "' + kw + '"…');
+      try {
+        const html = await fetchViaProxy('https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?q=' + encodeURIComponent(kw) + '&currentDocType=bids');
+        const rows = parseRows(html);
+        console.log('COMMBUYS "' + kw + '":', rows.length, 'results');
+        for (const { bidNum, link, org, desc, date } of rows) {
+          if (seenIds.has(bidNum)) continue;
+          seenIds.add(bidNum);
+          allOpps.push({ id:'commbuys-'+bidNum.replace(/\W+/g,'-'), source:'COMMBUYS', title:desc, agency:org, deadline:date, link, description:'', bid_number:bidNum, type:/rfp|request for proposal/i.test(desc)?'RFP':/rfq/i.test(desc)?'RFQ':'Bid' });
+        }
+      } catch(e) { console.warn('COMMBUYS "' + kw + '" error:', e.message); }
+    }
+    console.log('COMMBUYS total:', allOpps.length);
     return allOpps;
   }
 
@@ -818,7 +834,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v22</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v24</span>
         <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
       </div>
     </div>
