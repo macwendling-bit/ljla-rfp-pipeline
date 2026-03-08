@@ -76,7 +76,7 @@ const COMMBUYS_SEARCH_TERMS = [
   'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v21';
+const STORAGE_KEY = 'ljla_v22';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -202,65 +202,29 @@ export default function App() {
   }
 
   // ── COMMBUYS (MA statewide) ────────────────────────────────────────────────────
-  // COMMBUYS is a JSF app — pagination via GET params doesn't work (always returns
-  // the same 25 bids regardless of pageNum). Proper search requires a server-side
-  // JSF POST with ViewState. We use the /api/commbuys endpoint on our server which
-  // does the two-step GET→POST. We search multiple relevant keywords to maximize coverage.
   async function fetchCOMMBUYS() {
     const allOpps = [];
     const seenIds = new Set();
-
-    const KEYWORDS = [
-      'landscape architecture',
-      'landscape design',
-      'park design',
-      'park master plan',
-      'streetscape',
-      'urban design',
-      'site design',
-      'open space',
-      'waterfront design',
-      'trail design',
-      'plaza design',
-      'campus landscape',
-    ];
-
-    function parseHTML(html) {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const rows = [...doc.querySelectorAll('table tr')];
-      const opps = [];
-      for (const row of rows) {
+    try {
+      setLoadingMsg('COMMBUYS — loading open bids…');
+      const html = await fetchViaProxy('https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true');
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      for (const row of doc.querySelectorAll('table tr')) {
         const cells = row.querySelectorAll('td');
         if (cells.length < 8) continue;
         const bidLink = cells[0]?.querySelector('a');
         if (!bidLink) continue;
         const bidNum = bidLink.textContent.trim();
-        if (!bidNum || !bidNum.startsWith('BD-')) continue;
+        if (!bidNum || seenIds.has(bidNum)) continue;
+        seenIds.add(bidNum);
         const href = bidLink.getAttribute('href') || '';
-        const link = href.startsWith('http') ? href : `https://www.commbuys.com${href}`;
-        const orgName = cells[2]?.textContent.trim() || '';
-        const description = cells[6]?.textContent.trim() || '';
+        const link = href.startsWith('http') ? href : 'https://www.commbuys.com' + href;
+        const description = cells[6]?.textContent.trim() || bidNum;
         const dateText = cells[7]?.textContent.trim() || '';
-        opps.push({ bidNum, link, orgName, description, dateText });
+        const orgName = cells[2]?.textContent.trim() || 'MA Agency';
+        allOpps.push({ id:'commbuys-'+bidNum.replace(/\W+/g,'-'), source:'COMMBUYS', title:description, agency:orgName, deadline:dateText, link, description:'', bid_number:bidNum, type:'Bid' });
       }
-      return opps;
-    }
-
-    try {
-      for (let i = 0; i < KEYWORDS.length; i++) {
-        const kw = KEYWORDS[i];
-        setLoadingMsg(`COMMBUYS — searching "${kw}" (${i+1}/${KEYWORDS.length})…`);
-        const html = await fetch(`/api/commbuys?q=${encodeURIComponent(kw)}`).then(r => r.text());
-        const opps = parseHTML(html);
-        console.log(`COMMBUYS "${kw}": ${opps.length} rows found`);
-        for (const { bidNum, link, orgName, description, dateText } of opps) {
-          if (seenIds.has(bidNum)) continue;
-          seenIds.add(bidNum);
-          allOpps.push({ id:`commbuys-${bidNum.replace(/\W+/g,'-')}`, source:'COMMBUYS', title:description||bidNum, agency:orgName||'MA Agency', deadline:dateText, link, description:'', bid_number:bidNum, type:/rfp|request for proposal/i.test(description)?'RFP':/rfq/i.test(description)?'RFQ':'Bid' });
-        }
-      }
-      console.log(`COMMBUYS total: ${allOpps.length} unique results`);
+      console.log('COMMBUYS raw results:', allOpps.length);
     } catch(e) { console.warn('COMMBUYS error:', e.message); }
     return allOpps;
   }
@@ -854,7 +818,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v21</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v22</span>
         <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
       </div>
     </div>
