@@ -76,7 +76,7 @@ const COMMBUYS_SEARCH_TERMS = [
   'site design',
 ];
 
-const STORAGE_KEY = 'ljla_v15';
+const STORAGE_KEY = 'ljla_v16';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -214,16 +214,18 @@ export default function App() {
       for (const row of rows) {
         const cells = row.querySelectorAll('td');
         if (cells.length < 5) continue;
-        // Col 0: bid # (link), Col 1: org name, Col 4: description, Col 5: opening date
+        // Actual column layout (verified from live DOM):
+        // Col 0: Bid Solicitation # (link), Col 2: Organization Name,
+        // Col 6: Description, Col 7: Bid Opening Date
         const bidLink = cells[0]?.querySelector('a');
         if (!bidLink) continue;
         const bidNum = bidLink.textContent.trim();
         if (!bidNum) continue;
         const href = bidLink.getAttribute('href') || '';
         const link = href.startsWith('http') ? href : `https://www.commbuys.com${href}`;
-        const orgName = cells[1]?.textContent.trim() || '';
-        const description = cells[4]?.textContent.trim() || '';
-        const dateText = cells[5]?.textContent.trim() || '';
+        const orgName = cells[2]?.textContent.trim() || '';
+        const description = cells[6]?.textContent.trim() || '';
+        const dateText = cells[7]?.textContent.trim() || '';
         results.push({ bidNum, link, orgName, description, dateText });
       }
       return results;
@@ -563,177 +565,210 @@ export default function App() {
     });
 
   // ── Render ─────────────────────────────────────────────────────────────────────
-  return (
-    <div style={{ fontFamily:"'Poppins','Helvetica Neue',Arial,sans-serif", background:BRAND.bg, minHeight:'100vh', color:BRAND.text }}>
+  const inputStyle = {
+    padding:'7px 12px', border:`1px solid ${BRAND.border}`, borderRadius:0,
+    fontSize:12, fontFamily:"'Poppins','Helvetica Neue',Arial,sans-serif",
+    color:BRAND.text, background:'#fff', outline:'none',
+  };
+  const btnGhost = {
+    background:'transparent', border:`1px solid ${BRAND.border}`, color:BRAND.secondary,
+    padding:'7px 16px', cursor:'pointer', fontSize:11, letterSpacing:0.3,
+    fontFamily:"'Poppins','Helvetica Neue',Arial,sans-serif",
+  };
+  const btnPrimary = {
+    background:BRAND.primary, border:'none', color:'#fff',
+    padding:'7px 22px', cursor:'pointer', fontSize:11, fontWeight:600, letterSpacing:0.5,
+    fontFamily:"'Poppins','Helvetica Neue',Arial,sans-serif",
+  };
 
-      {/* Header */}
-      <div style={{ background:'#fff', borderBottom:`1px solid ${BRAND.border}`, padding:'16px 32px', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:12 }}>
-        <div>
-          <div style={{ color:BRAND.primary, fontSize:13, fontWeight:600, letterSpacing:0.5, textTransform:'uppercase' }}>LeBlanc Jones Landscape Architects</div>
-          <div style={{ color:BRAND.text, fontSize:20, fontWeight:700, marginTop:2, letterSpacing:-0.3 }}>Public Work Pipeline</div>
-          <div style={{ color:BRAND.muted, fontSize:11, marginTop:3 }}>
-            29 CivicEngage towns · Boston · Somerville · Watertown · Portsmouth · Providence · COMMBUYS · NH State · SAM.gov
-          </div>
+  return (
+    <div style={{ fontFamily:"'Poppins','Helvetica Neue',Arial,sans-serif", background:'#fff', minHeight:'100vh', color:BRAND.text }}>
+
+      {/* Top nav — mirrors leblancjones.com header */}
+      <div style={{ padding:'22px 48px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:`1px solid ${BRAND.border}` }}>
+        <div style={{ color:BRAND.primary, fontSize:14, fontWeight:400, letterSpacing:0.2 }}>
+          LeBlanc Jones Landscape Architects
         </div>
-        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-          <button onClick={() => setShowApiKey(v=>!v)}
-            style={{ background:'transparent', border:`1px solid ${BRAND.border}`, color:BRAND.secondary, padding:'6px 14px', borderRadius:3, cursor:'pointer', fontSize:11 }}>
-            ⚙ SAM API Key
-          </button>
-          <button onClick={() => setShowAddManual(v=>!v)}
-            style={{ background:'transparent', border:`1px solid ${BRAND.border}`, color:BRAND.secondary, padding:'6px 14px', borderRadius:3, cursor:'pointer', fontSize:11 }}>
-            + Add Manual
-          </button>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <button onClick={() => setShowApiKey(v=>!v)} style={btnGhost}>SAM Key</button>
+          <button onClick={() => setShowAddManual(v=>!v)} style={btnGhost}>+ Add</button>
           <button onClick={runSearch} disabled={loading}
-            style={{ background:loading?BRAND.muted:BRAND.primary, border:'none', color:'#fff', padding:'8px 20px', borderRadius:3, cursor:loading?'not-allowed':'pointer', fontSize:12, fontWeight:600 }}>
-            {loading ? '⟳ Searching…' : '⟳ Search All Sources'}
+            style={{ ...btnPrimary, background: loading ? BRAND.muted : BRAND.primary, cursor: loading ? 'not-allowed' : 'pointer' }}>
+            {loading ? 'Searching…' : 'Search'}
           </button>
         </div>
       </div>
 
-      {/* API Key panel */}
-      {showApiKey && (
-        <div style={{ background:'#fff', borderBottom:`1px solid ${BRAND.border}`, padding:'10px 32px', display:'flex', gap:10, alignItems:'center' }}>
-          <span style={{ fontSize:12, color:BRAND.muted }}>SAM.gov API Key:</span>
-          <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-            placeholder="SAM-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-            style={{ flex:1, maxWidth:400, padding:'5px 10px', border:`1px solid ${BRAND.border}`, borderRadius:3, fontSize:12 }} />
-          <button onClick={() => setShowApiKey(false)}
-            style={{ background:BRAND.primary, color:'#fff', border:'none', padding:'5px 14px', borderRadius:3, cursor:'pointer', fontSize:12 }}>Save</button>
-        </div>
-      )}
+      {/* Title row */}
+      <div style={{ padding:'32px 48px 0' }}>
+        <div style={{ fontSize:11, color:BRAND.muted, letterSpacing:1.5, textTransform:'uppercase', marginBottom:6 }}>Public Work</div>
+        <div style={{ fontSize:28, fontWeight:300, color:BRAND.text, letterSpacing:-0.5, lineHeight:1.2 }}>Opportunity Pipeline</div>
+      </div>
 
-      {/* Add Manual panel */}
-      {showAddManual && (
-        <div style={{ background:'#fff', borderBottom:`1px solid ${BRAND.border}`, padding:'14px 32px' }}>
-          <div style={{ fontSize:13, fontWeight:600, marginBottom:10, color:BRAND.primary }}>Add Manual Entry</div>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-            {[['Title *','title','260px'],['Agency','agency','160px'],['Due Date','deadline','120px'],['URL','link','220px']].map(([ph,field,w]) => (
-              <input key={field} placeholder={ph} value={manualForm[field]} onChange={e => setManualForm(f=>({...f,[field]:e.target.value}))}
-                style={{ width:w, padding:'6px 10px', border:`1px solid ${BRAND.border}`, borderRadius:3, fontSize:12 }} />
-            ))}
-            <button onClick={addManual} style={{ background:BRAND.primary, color:'#fff', border:'none', padding:'6px 16px', borderRadius:3, cursor:'pointer', fontSize:12 }}>Add</button>
+      {/* Panels */}
+      {showApiKey && (
+        <div style={{ margin:'16px 48px 0', padding:'16px 20px', background:BRAND.bg, border:`1px solid ${BRAND.border}` }}>
+          <div style={{ fontSize:11, color:BRAND.muted, marginBottom:8, letterSpacing:0.5 }}>SAM.GOV API KEY</div>
+          <div style={{ display:'flex', gap:8 }}>
+            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+              placeholder="SAM-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              style={{ ...inputStyle, flex:1, maxWidth:420 }} />
+            <button onClick={() => setShowApiKey(false)} style={btnPrimary}>Save</button>
           </div>
         </div>
       )}
 
-      {/* Loading bar */}
+      {showAddManual && (
+        <div style={{ margin:'16px 48px 0', padding:'16px 20px', background:BRAND.bg, border:`1px solid ${BRAND.border}` }}>
+          <div style={{ fontSize:11, color:BRAND.muted, marginBottom:10, letterSpacing:0.5 }}>ADD MANUAL ENTRY</div>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            {[['Title *','title','280px'],['Agency','agency','160px'],['Due Date','deadline','120px'],['URL','link','220px']].map(([ph,field,w]) => (
+              <input key={field} placeholder={ph} value={manualForm[field]}
+                onChange={e => setManualForm(f=>({...f,[field]:e.target.value}))}
+                style={{ ...inputStyle, width:w }} />
+            ))}
+            <button onClick={addManual} style={btnPrimary}>Add</button>
+          </div>
+        </div>
+      )}
+
       {loading && (
-        <div style={{ background:BRAND.primary, color:'#fff', padding:'6px 32px', fontSize:11 }}>{loadingMsg}</div>
+        <div style={{ margin:'16px 48px 0', padding:'8px 0', borderTop:`2px solid ${BRAND.primary}` }}>
+          <div style={{ fontSize:11, color:BRAND.primary, letterSpacing:0.3 }}>{loadingMsg}</div>
+        </div>
       )}
 
-      {/* Error */}
       {error && (
-        <div style={{ background:'#fff3f3', borderLeft:`3px solid #c44`, padding:'10px 32px', fontSize:12, color:'#c44' }}>⚠ {error}</div>
+        <div style={{ margin:'12px 48px 0', fontSize:12, color:'#c44' }}>⚠ {error}</div>
       )}
 
-      {/* Stats + filter bar */}
-      <div style={{ background:'#fff', borderBottom:`1px solid ${BRAND.border}`, padding:'10px 32px', display:'flex', gap:14, flexWrap:'wrap', alignItems:'center' }}>
-        <span style={{ fontSize:13, fontWeight:600, color:BRAND.text }}>
-          {filtered.length} bid{filtered.length !== 1 ? 's' : ''}{results.length !== filtered.length ? ` (of ${results.length} total)` : ''}
+      {/* Filter / stats bar */}
+      <div style={{ padding:'20px 48px 0', display:'flex', gap:14, flexWrap:'wrap', alignItems:'center' }}>
+        <span style={{ fontSize:12, color:BRAND.secondary }}>
+          {filtered.length} {filtered.length === 1 ? 'opportunity' : 'opportunities'}
+          {results.length !== filtered.length ? <span style={{ color:BRAND.muted }}> of {results.length}</span> : ''}
         </span>
         {lastSearched && (
           <span style={{ fontSize:11, color:BRAND.muted }}>
-            Last searched: {new Date(lastSearched).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+            · searched {new Date(lastSearched).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
           </span>
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
-          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
-            style={{ padding:'5px 10px', border:`1px solid ${BRAND.border}`, borderRadius:3, fontSize:12, background:'#fff' }}>
+          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)} style={{ ...inputStyle, paddingRight:8 }}>
             {sources.map(s => <option key={s} value={s}>{s === 'All' ? 'All Sources' : s}</option>)}
           </select>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-            style={{ padding:'5px 10px', border:`1px solid ${BRAND.border}`, borderRadius:3, fontSize:12, background:'#fff' }}>
-            <option value="deadline">Sort: Due Date</option>
-            <option value="source">Sort: Source</option>
-            <option value="title">Sort: Title</option>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inputStyle, paddingRight:8 }}>
+            <option value="deadline">Due Date</option>
+            <option value="source">Source</option>
+            <option value="title">Title</option>
           </select>
           {results.length > 0 && (
-            <button onClick={() => setResults(r => r.filter(x => x.source === 'Manual'))}
-              style={{ background:'transparent', border:`1px solid ${BRAND.border}`, color:BRAND.muted, padding:'5px 10px', borderRadius:3, cursor:'pointer', fontSize:11 }}>
-              Clear
-            </button>
+            <button onClick={() => setResults(r => r.filter(x => x.source === 'Manual'))} style={btnGhost}>Clear</button>
           )}
         </div>
       </div>
 
-      {/* Bid list */}
-      <div style={{ maxWidth:960, margin:'0 auto', padding:'16px 24px' }}>
+      {/* Opportunity list — editorial rows, no card boxes */}
+      <div style={{ padding:'12px 48px 48px' }}>
+
         {filtered.length === 0 && !loading && (
-          <div style={{ textAlign:'center', padding:'60px 0', color:BRAND.muted }}>
-            <div style={{ fontSize:32, marginBottom:12 }}>🔍</div>
-            <div style={{ fontSize:14, fontWeight:600, marginBottom:6 }}>No bids yet</div>
-            <div style={{ fontSize:12 }}>Click "Search All Sources" to scan LA design service bids across all sources.</div>
+          <div style={{ padding:'80px 0', textAlign:'center', color:BRAND.muted }}>
+            <div style={{ fontSize:12, marginBottom:6 }}>No opportunities yet.</div>
+            <div style={{ fontSize:11 }}>Click Search to scan all sources.</div>
           </div>
         )}
 
-        {filtered.map(opp => {
+        {filtered.map((opp, idx) => {
           const isExpanded = expandedId === opp.id;
-          const typeColor = opp.type === 'RFP' ? '#1A5CA8' : opp.type === 'RFQ' ? '#3C75BF' : BRAND.muted;
+          const typeColor = opp.type === 'RFP' ? BRAND.primary : opp.type === 'RFQ' ? '#5A9BD4' : BRAND.muted;
           return (
-            <div key={opp.id} style={{ background:'#fff', border:`1px solid ${BRAND.border}`, borderRadius:4, marginBottom:8, overflow:'hidden' }}>
-              <div style={{ padding:'14px 20px', display:'flex', alignItems:'flex-start', gap:14, cursor:'pointer' }}
+            <div key={opp.id}>
+              {/* Hairline divider */}
+              <div style={{ borderTop: idx === 0 ? `1px solid ${BRAND.border}` : 'none' }} />
+              <div style={{ borderTop:`1px solid ${BRAND.border}`, padding:'18px 0', cursor:'pointer' }}
                 onClick={() => setExpandedId(isExpanded ? null : opp.id)}>
 
-                <div style={{ minWidth:36, paddingTop:2 }}>
-                  <span style={{ background:`${typeColor}18`, color:typeColor, fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:2, letterSpacing:0.5, textTransform:'uppercase' }}>
-                    {opp.type || 'BID'}
-                  </span>
-                </div>
+                <div style={{ display:'flex', alignItems:'flex-start', gap:20 }}>
 
-                <div style={{ flex:1, minWidth:0 }}>
-                  {opp.link ? (
-                    <a href={opp.link} target="_blank" rel="noreferrer"
-                      onClick={e => e.stopPropagation()}
-                      style={{ color:BRAND.primary, fontWeight:600, fontSize:14, textDecoration:'none', lineHeight:1.4 }}
-                      onMouseOver={e => e.target.style.textDecoration='underline'}
-                      onMouseOut={e => e.target.style.textDecoration='none'}>
-                      {opp.title}
-                    </a>
-                  ) : (
-                    <span style={{ color:BRAND.text, fontWeight:600, fontSize:14 }}>{opp.title}</span>
-                  )}
-                  <div style={{ display:'flex', gap:14, marginTop:5, flexWrap:'wrap', alignItems:'center' }}>
-                    <span style={{ fontSize:11, color:BRAND.secondary, fontWeight:500 }}>{opp.agency || opp.source}</span>
-                    {opp.agency !== opp.source && <span style={{ fontSize:11, color:BRAND.muted }}>{opp.source}</span>}
-                    {opp.deadline && <span style={{ fontSize:11, color:BRAND.muted }}>Due: <strong style={{ color:BRAND.secondary }}>{opp.deadline}</strong></span>}
-                    {opp.bid_number && <span style={{ fontSize:10, color:BRAND.muted, fontFamily:'monospace' }}>{opp.bid_number}</span>}
+                  {/* Type pill — left column, fixed width */}
+                  <div style={{ minWidth:44, paddingTop:2 }}>
+                    <span style={{ fontSize:9, color:typeColor, fontWeight:600, letterSpacing:1, textTransform:'uppercase' }}>
+                      {opp.type || 'Bid'}
+                    </span>
                   </div>
-                  {opp.description && (
-                    <p style={{ fontSize:11, color:BRAND.muted, margin:'6px 0 0', lineHeight:1.5 }}>
-                      {opp.description.substring(0,180)}{opp.description.length > 180 ? '…' : ''}
-                    </p>
-                  )}
-                </div>
 
-                <div style={{ color:BRAND.muted, fontSize:11, paddingTop:3 }}>{isExpanded ? '▲' : '▼'}</div>
-              </div>
-
-              {isExpanded && (
-                <div style={{ borderTop:`1px solid ${BRAND.border}`, padding:'12px 20px 14px', background:BRAND.bg }}>
-                  <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:10 }}>
-                    {opp.link && (
+                  {/* Main content */}
+                  <div style={{ flex:1, minWidth:0 }}>
+                    {opp.link ? (
                       <a href={opp.link} target="_blank" rel="noreferrer"
-                        style={{ fontSize:12, color:'#fff', background:BRAND.primary, padding:'5px 14px', borderRadius:3, textDecoration:'none', fontWeight:600 }}>
-                        Open Bid ↗
+                        onClick={e => e.stopPropagation()}
+                        style={{ color:BRAND.text, fontWeight:400, fontSize:14, textDecoration:'none', lineHeight:1.5 }}
+                        onMouseOver={e => e.target.style.color=BRAND.primary}
+                        onMouseOut={e => e.target.style.color=BRAND.text}>
+                        {opp.title}
                       </a>
+                    ) : (
+                      <span style={{ fontSize:14, color:BRAND.text, lineHeight:1.5 }}>{opp.title}</span>
                     )}
-                    <button onClick={() => { setResults(prev => prev.filter(r => r.id !== opp.id)); setExpandedId(null); }}
-                      style={{ fontSize:11, color:'#c44', background:'transparent', border:`1px solid #e8b`, padding:'5px 12px', borderRadius:3, cursor:'pointer' }}>
-                      Remove
-                    </button>
+                    <div style={{ display:'flex', gap:16, marginTop:4, flexWrap:'wrap' }}>
+                      <span style={{ fontSize:11, color:BRAND.secondary }}>{opp.agency || opp.source}</span>
+                      {opp.agency && opp.agency !== opp.source && (
+                        <span style={{ fontSize:11, color:BRAND.muted }}>{opp.source}</span>
+                      )}
+                      {opp.deadline && (
+                        <span style={{ fontSize:11, color:BRAND.muted }}>Due {opp.deadline}</span>
+                      )}
+                    </div>
                   </div>
-                  {opp.description && <p style={{ fontSize:12, color:BRAND.secondary, lineHeight:1.6, margin:0 }}>{opp.description}</p>}
+
+                  {/* Expand toggle */}
+                  <div style={{ fontSize:10, color:BRAND.muted, paddingTop:4, userSelect:'none' }}>
+                    {isExpanded ? '−' : '+'}
+                  </div>
                 </div>
-              )}
+
+                {/* Expanded panel */}
+                {isExpanded && (
+                  <div style={{ marginTop:12, paddingLeft:64 }}>
+                    {opp.bid_number && (
+                      <div style={{ fontSize:10, color:BRAND.muted, fontFamily:'monospace', marginBottom:8 }}>
+                        {opp.bid_number}
+                      </div>
+                    )}
+                    {opp.description && (
+                      <p style={{ fontSize:12, color:BRAND.secondary, lineHeight:1.7, margin:'0 0 12px' }}>
+                        {opp.description}
+                      </p>
+                    )}
+                    <div style={{ display:'flex', gap:10 }}>
+                      {opp.link && (
+                        <a href={opp.link} target="_blank" rel="noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          style={{ fontSize:11, color:BRAND.primary, textDecoration:'none', letterSpacing:0.3 }}
+                          onMouseOver={e => e.target.style.textDecoration='underline'}
+                          onMouseOut={e => e.target.style.textDecoration='none'}>
+                          View Bid ↗
+                        </a>
+                      )}
+                      <span style={{ color:BRAND.border }}>·</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); setResults(prev => prev.filter(r => r.id !== opp.id)); setExpandedId(null); }}
+                        style={{ background:'none', border:'none', padding:0, fontSize:11, color:BRAND.muted, cursor:'pointer' }}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}
       </div>
 
       {/* Footer */}
-      <div style={{ padding:'20px 32px', color:BRAND.muted, fontSize:10, borderTop:`1px solid ${BRAND.border}`, textAlign:'center', background:'#fff', marginTop:16 }}>
-        LJLA Public Work Pipeline v15 · 29 CivicEngage towns · Boston · Somerville · Watertown · Portsmouth · Providence · COMMBUYS · NH State · SAM.gov
+      <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v16</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>29 towns · Boston · COMMBUYS · NH · Providence · SAM.gov</span>
       </div>
     </div>
   );
