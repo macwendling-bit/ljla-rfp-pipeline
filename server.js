@@ -13,147 +13,164 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
   'Accept-Encoding': 'identity',
   'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
 };
 
-// ─── Generic proxy endpoint ────────────────────────────────────────────────
+function httpsReq(urlStr, method, headers, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new url.URL(urlStr);
+    const buf = body ? Buffer.from(body, 'utf8') : null;
+    const req = https.request({
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method,
+      headers: { ...BROWSER_HEADERS, ...headers, ...(buf ? { 'Content-Length': buf.length } : {}) },
+      timeout: 20000,
+    }, res => {
+      const cookies = res.headers['set-cookie'] || [];
+      const location = res.headers['location'] || null;
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', c => data += c);
+      res.on('end', () => resolve({ body: data, cookies, status: res.statusCode, location }));
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+    if (buf) req.write(buf);
+    req.end();
+  });
+}
+
+// Generic proxy
 app.get('/api/fetch', (req, res) => {
   const targetUrl = req.query.url;
-  if (!targetUrl) return res.status(400).json({ error: 'Missing url parameter' });
-
+  if (!targetUrl) return res.status(400).json({ error: 'Missing url' });
   let parsed;
-  try {
-    parsed = new url.URL(targetUrl);
-    if (!['http:', 'https:'].includes(parsed.protocol))
-      return res.status(400).json({ error: 'Only http/https URLs allowed' });
-  } catch {
-    return res.status(400).json({ error: 'Invalid URL' });
-  }
-
+  try { parsed = new url.URL(targetUrl); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return res.status(400).json({ error: 'http/https only' });
   const protocol = parsed.protocol === 'https:' ? https : http;
-  const options = {
+  const proxyReq = protocol.request({
     hostname: parsed.hostname,
     port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
     path: parsed.pathname + parsed.search,
     method: 'GET',
     headers: BROWSER_HEADERS,
     timeout: 15000,
-  };
-
-  const proxyReq = protocol.request(options, (proxyRes) => {
-    if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode)) {
-      const redirectUrl = proxyRes.headers.location;
-      if (redirectUrl && req.query._redirects < 5) {
-        const absRedirect = redirectUrl.startsWith('http')
-          ? redirectUrl
-          : `${parsed.protocol}//${parsed.hostname}${redirectUrl}`;
-        return res.redirect(`/api/fetch?url=${encodeURIComponent(absRedirect)}&_redirects=${(parseInt(req.query._redirects) || 0) + 1}`);
+  }, proxyRes => {
+    if ([301,302,303,307,308].includes(proxyRes.statusCode)) {
+      const loc = proxyRes.headers.location;
+      if (loc && (req.query._redirects || 0) < 5) {
+        const abs = loc.startsWith('http') ? loc : `${parsed.protocol}//${parsed.hostname}${loc}`;
+        return res.redirect(`/api/fetch?url=${encodeURIComponent(abs)}&_redirects=${(parseInt(req.query._redirects)||0)+1}`);
       }
     }
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'text/html');
-    res.setHeader('X-Proxy-Status', proxyRes.statusCode);
     let body = '';
     proxyRes.setEncoding('utf8');
-    proxyRes.on('data', chunk => { body += chunk; });
+    proxyRes.on('data', c => body += c);
     proxyRes.on('end', () => res.send(body));
   });
-
-  proxyReq.on('timeout', () => { proxyReq.destroy(); res.status(504).json({ error: 'Request timed out' }); });
-  proxyReq.on('error', (err) => res.status(502).json({ error: `Proxy error: ${err.message}` }));
+  proxyReq.on('timeout', () => { proxyReq.destroy(); res.status(504).json({ error: 'timeout' }); });
+  proxyReq.on('error', e => res.status(502).json({ error: e.message }));
   proxyReq.end();
 });
 
-// ─── COMMBUYS keyword search endpoint ─────────────────────────────────────
-// COMMBUYS is a JSF app. Proper search requires:
-// 1. GET base page → extract JSESSIONID cookie + javax.faces.ViewState
-// 2. POST to search endpoint with ViewState + keyword → returns results HTML
-app.get('/api/commbuys', async (req, res) => {
-  const keyword = req.query.q || 'landscape architecture';
-
-  function httpsRequest(urlStr, method, headers, postBody) {
-    return new Promise((resolve, reject) => {
-      const parsed = new url.URL(urlStr);
-      const bodyBuf = postBody ? Buffer.from(postBody, 'utf8') : null;
-      const options = {
-        hostname: parsed.hostname,
-        path: parsed.pathname + parsed.search,
-        method,
-        headers: {
-          ...BROWSER_HEADERS,
-          ...headers,
-          ...(bodyBuf ? { 'Content-Length': bodyBuf.length } : {}),
-        },
-        timeout: 20000,
-      };
-      const req = https.request(options, response => {
-        const cookies = response.headers['set-cookie'] || [];
-        const location = response.headers['location'] || null;
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', c => { body += c; });
-        response.on('end', () => resolve({ body, cookies, status: response.statusCode, location }));
-      });
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-      req.on('error', reject);
-      if (bodyBuf) req.write(bodyBuf);
-      req.end();
-    });
-  }
+// COMMBUYS multi-page scraper — runs server-side to maintain JSF session
+app.get('/api/commbuys-all', async (req, res) => {
+  const BASE = 'https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml';
+  const MAX_PAGES = 40;
 
   try {
-    const BASE = 'https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml';
+    // Step 1: GET initial page — establish session + get ViewState
+    const step1 = await httpsReq(BASE + '?openBids=true', 'GET', {}, null);
+    let cookieStr = step1.cookies.map(c => c.split(';')[0]).join('; ');
 
-    // Step 1: GET page to acquire session cookie + ViewState
-    const step1 = await httpsRequest(BASE, 'GET', {}, null);
-    const cookieStr = step1.cookies.map(c => c.split(';')[0]).join('; ');
-
-    // Extract javax.faces.ViewState from the HTML
+    // Extract ViewState
     const vsMatch = step1.body.match(/javax\.faces\.ViewState[^>]*value="([^"]+)"/);
-    if (!vsMatch) {
-      return res.status(502).json({ error: 'Could not find JSF ViewState', bodySnippet: step1.body.slice(0, 500) });
+    if (!vsMatch) return res.status(502).json({ error: 'No ViewState found' });
+
+    // Parse rows from HTML
+    function parseRows(html) {
+      const rows = [];
+      const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+      let trMatch;
+      while ((trMatch = trRegex.exec(html)) !== null) {
+        const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+        const cells = [];
+        let tdMatch;
+        while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) cells.push(tdMatch[1]);
+        if (cells.length < 8) continue;
+        const linkMatch = cells[0].match(/href="([^"]+)"[^>]*>([^<]+)</);
+        if (!linkMatch) continue;
+        const bidNum = linkMatch[2].trim();
+        if (!bidNum.startsWith('BD-')) continue;
+        const href = linkMatch[1];
+        const link = href.startsWith('http') ? href : 'https://www.commbuys.com' + href;
+        const stripTags = s => s.replace(/<[^>]+>/g, '').trim();
+        rows.push({
+          bidNum,
+          link,
+          org: stripTags(cells[2]),
+          desc: stripTags(cells[6]),
+          date: stripTags(cells[7]),
+        });
+      }
+      return rows;
     }
-    const viewState = vsMatch[1];
 
-    // Step 2: POST keyword search using the ViewState
-    const formData = new URLSearchParams({
-      'searchForm': 'searchForm',
-      'searchForm:keywordTextBox': keyword,
-      'searchForm:currentDocType': 'bids',
-      'searchForm:bidSearchButton': 'searchForm:bidSearchButton',
-      'javax.faces.ViewState': viewState,
-      'javax.faces.partial.ajax': 'false',
-    }).toString();
+    const allRows = parseRows(step1.body);
+    let viewState = vsMatch[1];
 
-    const step2 = await httpsRequest(BASE, 'POST', {
-      'Cookie': cookieStr,
-      'Referer': BASE,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Origin': 'https://www.commbuys.com',
-    }, formData);
+    // Step 2: paginate via JSF partial POST
+    for (let page = 2; page <= MAX_PAGES; page++) {
+      const formData = new URLSearchParams({
+        'searchForm': 'searchForm',
+        'searchForm:j_idt118': String(page),
+        'javax.faces.ViewState': viewState,
+        'javax.faces.partial.ajax': 'true',
+        'javax.faces.source': 'searchForm:j_idt118',
+        'javax.faces.partial.execute': '@all',
+        'javax.faces.partial.render': 'searchForm',
+      }).toString();
+
+      const step = await httpsReq(BASE, 'POST', {
+        'Cookie': cookieStr,
+        'Referer': BASE + '?openBids=true',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://www.commbuys.com',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Faces-Request': 'partial/ajax',
+      }, formData);
+
+      // Update cookies
+      if (step.cookies.length) cookieStr = step.cookies.map(c => c.split(';')[0]).join('; ');
+
+      // Update ViewState from partial response
+      const newVs = step.body.match(/javax\.faces\.ViewState[^>]*<!\[CDATA\[([^\]]+)\]\]>/) ||
+                    step.body.match(/javax\.faces\.ViewState[^"]*"([^"]{20,})"/);
+      if (newVs) viewState = newVs[1];
+
+      const rows = parseRows(step.body);
+      if (rows.length === 0) break;
+      allRows.push(...rows);
+
+      // Dedupe check — if we're seeing the same bids, we've hit the end
+      const lastBid = rows[rows.length - 1]?.bidNum;
+      if (allRows.filter(r => r.bidNum === lastBid).length > 1) break;
+    }
+
+    // Deduplicate
+    const seen = new Set();
+    const unique = allRows.filter(r => { if (seen.has(r.bidNum)) return false; seen.add(r.bidNum); return true; });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'text/html');
-    res.setHeader('X-ViewState-Found', 'true');
-    res.setHeader('X-Post-Status', step2.status);
-    res.send(step2.body);
-  } catch (e) {
-    res.status(502).json({ error: `COMMBUYS fetch failed: ${e.message}` });
+    res.json({ count: unique.length, bids: unique });
+  } catch(e) {
+    res.status(502).json({ error: e.message });
   }
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// ─── Serve React build ─────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.use(express.static(path.join(__dirname, 'build')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
-});
-
-// ─── Start ─────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`LJLA RFP Pipeline server running on port ${PORT}`);
-});
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
+app.listen(PORT, () => console.log(`LJLA RFP Pipeline server on port ${PORT}`));
