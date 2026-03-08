@@ -54,15 +54,15 @@ function isRelevant(title, description) {
   return PASS_TERMS.some(k => t.includes(k));
 }
 
-// ─── SAM.GOV KEYWORDS ─────────────────────────────────────────────────────────
-const SAM_SEARCHES = [
-  'landscape architecture','landscape architect','landscape design',
-  'park design','streetscape design','waterfront design',
-  'urban plaza design','open space design','site design services',
-  'planting design',
+// ─── CTSOURCE SEARCH TERMS ────────────────────────────────────────────────────
+const CTSOURCE_KEYWORDS = [
+  'landscape architecture',
+  'landscape design',
+  'design services',
+  'park design',
 ];
 
-const STORAGE_KEY = 'ljla_v26';
+const STORAGE_KEY = 'ljla_v27';
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -70,8 +70,6 @@ export default function App() {
   const [loading, setLoading]             = useState(false);
   const [loadingMsg, setLoadingMsg]       = useState('');
   const [error, setError]                 = useState(null);
-  const [apiKey, setApiKey]               = useState('');
-  const [showApiKey, setShowApiKey]       = useState(false);
   const [sourceFilter, setSourceFilter]   = useState('All');
   const [sortBy, setSortBy]               = useState('deadline');
   const [lastSearched, setLastSearched]   = useState(null);
@@ -86,18 +84,17 @@ export default function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const { results:r, lastSearched:ls, apiKey:ak } = JSON.parse(saved);
+        const { results:r, lastSearched:ls } = JSON.parse(saved);
         if (r) setResults(r);
         if (ls) setLastSearched(ls);
-        if (ak) setApiKey(ak);
       }
     } catch(e) {}
   }, []);
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ results, lastSearched, apiKey })); }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ results, lastSearched })); }
     catch(e) {}
-  }, [results, lastSearched, apiKey]);
+  }, [results, lastSearched]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   async function fetchViaProxy(url) {
@@ -110,33 +107,46 @@ export default function App() {
     return `${prefix}-${(str||'').replace(/\W+/g,'-').substring(0,35).replace(/-$/,'')}`;
   }
 
-  // ── SAM.gov ───────────────────────────────────────────────────────────────────
-  async function fetchSAM(key) {
+  // ── CTSource (CT statewide) — WebProcure JSON API ────────────────────────────
+  // CT DAS Bid Board is powered by WebProcure (Proactis). The JSON API is public.
+  // customerid=51 = State of Connecticut. Returns 10 per page; hits = total count.
+  // Bid link: https://webprocure.proactiscloud.com/wp-web-public/en/#/bidboard/bid/{bidid}?customerid=51
+  async function fetchCTSource() {
     const allOpps = [];
     const seenIds = new Set();
-    for (let i = 0; i < SAM_SEARCHES.length; i++) {
-      const q = SAM_SEARCHES[i];
-      setLoadingMsg(`SAM.gov — "${q}" (${i+1}/${SAM_SEARCHES.length})…`);
+    for (const kw of CTSOURCE_KEYWORDS) {
+      setLoadingMsg(`CTSource — "${kw}"…`);
       try {
-        const url = `https://api.sam.gov/opportunities/v2/search?limit=25&offset=0&api_key=${key}&q=${encodeURIComponent(q)}&postedFrom=01/01/2024&active=true`;
-        const data = await fetch(url).then(r => r.json());
-        for (const opp of (data.opportunitiesData || [])) {
-          if (seenIds.has(opp.noticeId)) continue;
-          seenIds.add(opp.noticeId);
-          const title = opp.title || '';
-          if (!isRelevant(title)) continue;
+        const apiUrl = `https://webprocure.proactiscloud.com/wp-full-text-search/search/sols?customerid=51&q=${encodeURIComponent(kw)}&from=0&sort=r&f=&oids=`;
+        const text = await fetchViaProxy(apiUrl);
+        const data = JSON.parse(text);
+        const records = data.records || [];
+        console.log(`CTSource "${kw}": ${records.length} of ${data.hits} results`);
+        for (const r of records) {
+          if (seenIds.has(r.bidid)) continue;
+          // Skip closed/awarded
+          const status = r.ctBidstatus?.publicStatus || r.ctBidstatus?.name || '';
+          if (/awarded|cancel|retract|closed/i.test(status)) continue;
+          const title = r.title || '';
+          const desc = r.description || '';
+          if (!isRelevant(title, desc)) continue;
+          seenIds.add(r.bidid);
+          const agency = r.creatorOrg?.name || r.ownerOrg?.name || 'CT State';
+          const deadline = r.prtcpEndDate ? new Date(r.prtcpEndDate).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : '';
+          const link = `https://webprocure.proactiscloud.com/wp-web-public/en/#/bidboard/bid/${r.bidid}?customerid=51`;
+          const type = /rfp|proposal/i.test(r.orgBidClassType?.description || '') ? 'RFP' : /rfq|qualif/i.test(r.orgBidClassType?.description || '') ? 'RFQ' : 'Bid';
           allOpps.push({
-            id: `sam-${opp.noticeId}`,
-            source:'SAM.gov', title,
-            agency: opp.department || opp.subtierName || 'Federal',
-            deadline: opp.responseDeadLine ? opp.responseDeadLine.split('T')[0] : '',
-            link: opp.uiLink || `https://sam.gov/opp/${opp.noticeId}/view`,
-            description: opp.description ? opp.description.substring(0,200) : '',
-            type: opp.type === 'p' ? 'RFP' : opp.type === 'k' ? 'Contract' : 'Bid',
+            id: `ctsource-${r.bidid}`,
+            source: 'CTSource',
+            title, agency, deadline, link,
+            description: desc.substring(0, 200),
+            bid_number: r.bidNumber || '',
+            type,
           });
         }
-      } catch(e) { console.warn(`SAM "${q}":`, e.message); }
+      } catch(e) { console.warn(`CTSource "${kw}" error:`, e.message); }
     }
+    console.log(`CTSource total: ${allOpps.length}`);
     return allOpps;
   }
 
@@ -497,6 +507,9 @@ export default function App() {
       if (activeScope === 'commbuys') {
         mergeResults(await fetchCOMMBUYS());
 
+      } else if (activeScope === 'ctsource') {
+        mergeResults(await fetchCTSource());
+
       } else if (activeScope === 'boston') {
         mergeResults(await fetchBoston());
 
@@ -529,23 +542,21 @@ export default function App() {
         );
         mergeResults(arrays.flat());
 
-      } else if (activeScope === 'sam') {
-        if (!apiKey) { setError('SAM.gov requires an API key — click SAM Key to add it.'); return; }
-        mergeResults(await fetchSAM(apiKey));
-
-      // ── Search All: COMMBUYS first, then everything in parallel ─────────────
+      // ── Search All: COMMBUYS first, then CTSource, then everything in parallel ──
       } else {
-        // Step 1: COMMBUYS via PDF (server-side, no proxy contention)
+        // Step 1: COMMBUYS via PDF (server-side)
         mergeResults(await fetchCOMMBUYS());
 
-        // Step 2: Everything else in parallel
+        // Step 2: CTSource (CT statewide) — high value, run solo
+        mergeResults(await fetchCTSource());
+
+        // Step 3: Everything else in parallel
         setLoadingMsg('Searching remaining sources…');
         const [
-          samResults, bostonResults, watertownResults,
+          bostonResults, watertownResults,
           somervilleResults, providenceResults, nhdasResults,
           ...restArrays
         ] = await Promise.all([
-          apiKey ? fetchSAM(apiKey) : Promise.resolve([]),
           fetchBoston(),
           fetchWatertown(),
           fetchSomerville(),
@@ -556,7 +567,7 @@ export default function App() {
         ]);
 
         mergeResults([
-          ...samResults, ...bostonResults, ...watertownResults,
+          ...bostonResults, ...watertownResults,
           ...somervilleResults, ...providenceResults, ...nhdasResults,
           ...restArrays.flat(),
         ]);
@@ -570,7 +581,7 @@ export default function App() {
       setLoadingMsg('');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, searchScope]);
+  }, [searchScope]);
 
   // ── Filter & sort ──────────────────────────────────────────────────────────────
   const sources = ['All', ...new Set(results.map(r => r.source))].sort((a,b) => a==='All'?-1:a.localeCompare(b));
@@ -610,7 +621,6 @@ export default function App() {
           LeBlanc Jones Landscape Architects
         </div>
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          <button onClick={() => setShowApiKey(v=>!v)} style={btnGhost}>SAM Key</button>
           <button onClick={() => setShowAddManual(v=>!v)} style={btnGhost}>+ Add</button>
 
           {/* Split search button */}
@@ -628,6 +638,7 @@ export default function App() {
               {loading ? (loadingMsg || 'Searching…') : (
                 searchScope === 'all'        ? 'Search All' :
                 searchScope === 'commbuys'   ? 'Search COMMBUYS' :
+                searchScope === 'ctsource'   ? 'Search CTSource' :
                 searchScope === 'boston'     ? 'Search Boston' :
                 searchScope === 'somerville' ? 'Search Somerville' :
                 searchScope === 'watertown'  ? 'Search Watertown' :
@@ -635,7 +646,6 @@ export default function App() {
                 searchScope === 'providence' ? 'Search Providence' :
                 searchScope === 'nhdas'      ? 'Search NH State' :
                 searchScope === 'opengov'    ? 'Search OpenGov Cities' :
-                searchScope === 'sam'        ? 'Search SAM.gov' :
                 searchScope === 'towns'      ? 'Search Towns' : 'Search'
               )}
             </button>
@@ -644,6 +654,7 @@ export default function App() {
                 {[
                   ['all',        'Search All Sources'],
                   ['commbuys',   'COMMBUYS (MA statewide)'],
+                  ['ctsource',   'CTSource (CT statewide)'],
                   ['boston',     'City of Boston'],
                   ['somerville', 'Somerville MA'],
                   ['watertown',  'Watertown MA'],
@@ -652,7 +663,6 @@ export default function App() {
                   ['nhdas',      'NH State Procurement'],
                   ['opengov',    'OpenGov Cities'],
                   ['towns',      'All Towns'],
-                  ['sam',        'SAM.gov'],
                 ].map(([key, label]) => (
                   <div
                     key={key}
@@ -675,17 +685,6 @@ export default function App() {
       </div>
 
       {/* Panels */}
-      {showApiKey && (
-        <div style={{ margin:'16px 48px 0', padding:'16px 20px', background:BRAND.bg, border:`1px solid ${BRAND.border}` }}>
-          <div style={{ fontSize:11, color:BRAND.muted, marginBottom:8, letterSpacing:0.5 }}>SAM.GOV API KEY</div>
-          <div style={{ display:'flex', gap:8 }}>
-            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-              placeholder="SAM-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              style={{ ...inputStyle, flex:1, maxWidth:420 }} />
-            <button onClick={() => setShowApiKey(false)} style={btnPrimary}>Save</button>
-          </div>
-        </div>
-      )}
 
       {showAddManual && (
         <div style={{ margin:'16px 48px 0', padding:'16px 20px', background:BRAND.bg, border:`1px solid ${BRAND.border}` }}>
@@ -831,8 +830,8 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ padding:'16px 48px', borderTop:`1px solid ${BRAND.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v26</span>
-        <span style={{ fontSize:10, color:BRAND.muted }}>44 towns · Boston · COMMBUYS · OpenGov cities · NH · Providence · SAM.gov</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>LeBlanc Jones Landscape Architects · Public Work Pipeline v27</span>
+        <span style={{ fontSize:10, color:BRAND.muted }}>44 towns · Boston · COMMBUYS · CTSource · OpenGov cities · NH · Providence</span>
       </div>
     </div>
   );
